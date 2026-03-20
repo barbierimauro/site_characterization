@@ -82,6 +82,7 @@ from site_climate       import get_site_climate, report_site_climate
 from terrain_indices    import (compute_twi, report_twi,
                                 compute_thermal_index, report_thermal_index)
 from get_soil_properties import get_soil_properties, report_soil_properties
+from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail)
 
 try:
     import rasterio
@@ -637,16 +638,17 @@ def main():
     # 14 — Plots
     print("[14] Generating plots ...")
     plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
-              results, _outpath("crns_topo_main.png"))
+              results, _outpath("crns_topo_main.png"),
+              lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
     plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86,
                    kappa_topo, wmap, az_neutron, overlap_az, deficit_az,
                    _outpath("crns_footprint.png"))
     plot_horizon(azimuths, horizon, kappa_muon, per_az_muon,
                  _outpath("crns_horizon.png"))
-    _results_alt = s_elev
     plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
                     az_neutron, overlap_az, r86, z86, kappa_topo,
-                    _outpath("crns_fov_detail.png"))
+                    _outpath("crns_fov_detail.png"),
+                    lat=LAT, lon=LON, sensor_alt=s_elev)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")

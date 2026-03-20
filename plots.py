@@ -1,3 +1,8 @@
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 
 # =============================================================================
 # PLOTS
@@ -15,7 +20,7 @@ STYLE = {
 
 
 def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
-              results, path):
+              results, path, lat, lon, dem_radius_m):
     with plt.rc_context(STYLE):
         fig = plt.figure(figsize=(20, 14))
         gs  = GridSpec(2, 3, figure=fig, hspace=0.38, wspace=0.35)
@@ -23,7 +28,7 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
         # DEM + footprint circles
         ax1  = fig.add_subplot(gs[0, :2])
         dist = np.sqrt(dx_grid**2 + dy_grid**2)
-        em   = np.where(dist <= DEM_RADIUS_M,
+        em   = np.where(dist <= dem_radius_m,
                         np.where(np.isnan(elev), np.nanmean(elev), elev), np.nan)
         ext  = [dx_grid.min(), dx_grid.max(), dy_grid.min(), dy_grid.max()]
         im   = ax1.imshow(em, extent=ext, origin="upper",
@@ -38,11 +43,11 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
                      color="red", ls=ls, lw=lw, label=lbl)
         ax1.plot(0, 0, "r^", ms=12, zorder=5, label="Sensor")
         ax1.set_xlabel("Easting offset (m)"); ax1.set_ylabel("Northing offset (m)")
-        ax1.set_title(f"DEM & Neutron Footprint  ({LAT:.4f}N, {LON:.4f}E)  "
+        ax1.set_title(f"DEM & Neutron Footprint  ({lat:.4f}N, {lon:.4f}E)  "
                       f"alt={results['sensor_alt']:.0f} m")
         ax1.legend(loc="upper right", fontsize=9)
-        ax1.set_xlim(-DEM_RADIUS_M*0.6, DEM_RADIUS_M*0.6)
-        ax1.set_ylim(-DEM_RADIUS_M*0.6, DEM_RADIUS_M*0.6)
+        ax1.set_xlim(-dem_radius_m*0.6, dem_radius_m*0.6)
+        ax1.set_ylim(-dem_radius_m*0.6, dem_radius_m*0.6)
 
         # Theoretical kappa vs slope
         ax2 = fig.add_subplot(gs[0, 2])
@@ -71,11 +76,10 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
         ax3.set_xlabel("Easting offset (m)"); ax3.set_ylabel("Elevation (m)")
         ax3.set_title(f"E-W cross-section  (r86={r86:.0f} m)")
         ax3.legend(fontsize=8)
-        ax3.set_xlim(-DEM_RADIUS_M*0.5, DEM_RADIUS_M*0.5)
+        ax3.set_xlim(-dem_radius_m*0.5, dem_radius_m*0.5)
 
         # N-S profile
         ax4 = fig.add_subplot(gs[1, 1])
-        #mc = np.argmin(np.abs(dx_grid[:, dx_grid.shape[1]//2]))
         mc = np.argmin(np.abs(dx_grid[mr, :]))
 
         ax4.plot(dy_grid[:,mc], elev[:,mc], color="#2c3e50", lw=1.8)
@@ -87,7 +91,7 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
         ax4.set_xlabel("Northing offset (m)"); ax4.set_ylabel("Elevation (m)")
         ax4.set_title(f"N-S cross-section  (r86={r86:.0f} m)")
         ax4.legend(fontsize=8)
-        ax4.set_xlim(-DEM_RADIUS_M*0.5, DEM_RADIUS_M*0.5)
+        ax4.set_xlim(-dem_radius_m*0.5, dem_radius_m*0.5)
 
         # Kappa summary bar
         ax5  = fig.add_subplot(gs[1, 2])
@@ -107,7 +111,7 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
 
         fig.suptitle(
             f"CRNS Topographic Correction  |  "
-            f"{LAT:.4f}N {LON:.4f}E  |  "
+            f"{lat:.4f}N {lon:.4f}E  |  "
             f"Alt={results['sensor_alt']:.0f}m  P={results['pressure']:.1f}hPa",
             fontsize=14, fontweight="bold", y=0.99)
         fig.savefig(path, dpi=200, bbox_inches="tight")
@@ -150,6 +154,7 @@ def plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86_cm,
         wm_norm = np.where(mask_fp, wmap / max(float(np.nanmax(wmap)), 1e-6), np.nan)
         ax1.contourf(dx_grid, dy_grid, wm_norm,
                      levels=np.linspace(0, 1, 15), cmap="binary", alpha=0.22)
+
         ax1.plot(r86*np.sin(th), r86*np.cos(th), "k--", lw=2,
                  label=f"r86={r86:.0f}m")
         ax1.plot(0, 0, "k^", ms=10, zorder=5, label="Sensor")
@@ -176,7 +181,7 @@ def plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86_cm,
             ring = (dist_grid >= r0) & (dist_grid < r1) & mask_fp & ~np.isnan(elev)
             if not np.any(ring): continue
             e_r = elev[ring]; r_r = dist_grid[ring]
-            W   = weight_radial(r_r, r86)
+            W   = np.where(r_r < 1e-3, 0.0, np.exp(-r_r / (r86 / 3.0)))
             z_t = np.minimum(e_r, s_elev)
             ovl = np.clip(z_t - z_bot_ref, 0.0, z86_m) / z86_m
             Ws  = W.sum()
@@ -286,7 +291,8 @@ def plot_horizon(azimuths, horizon, kappa_muon, per_az_muon, path):
 
 
 def plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
-                    az_neutron, overlap_az, r86, z86_cm, kappa_topo, path):
+                    az_neutron, overlap_az, r86, z86_cm, kappa_topo, path,
+                    lat, lon, sensor_alt):
     """
     Detailed azimuth vs elevation angle FOV maps for both muons and neutrons.
     X-axis: azimuth 0-360 deg (N=0, E=90, S=180, W=270).
@@ -371,11 +377,10 @@ def plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
             ax2.axvline(xv, color="gray", ls=":", lw=0.8)
 
         fig.suptitle(
-            f"Detailed FOV  |  {LAT:.4f}N {LON:.4f}E  |  "
-            f"Alt={_results_alt:.0f}m  r86={r86:.0f}m",
+            f"Detailed FOV  |  {lat:.4f}N {lon:.4f}E  |  "
+            f"Alt={sensor_alt:.0f}m  r86={r86:.0f}m",
             fontsize=14, fontweight="bold")
         fig.savefig(path, dpi=200, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
-_results_alt = 0.0  # filled in main before calling plot_fov_detail
