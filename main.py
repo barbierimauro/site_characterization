@@ -76,6 +76,7 @@ import matplotlib.colors as mcolors
 from matplotlib.gridspec import GridSpec
 import requests, os, json, hashlib, time, math
 import multiprocessing as mp
+from kappa_topo_3d import compute_kappa_topo_3d, report_kappa_3d
 
 try:
     import rasterio
@@ -246,6 +247,12 @@ def clip_dem_to_radius(elev, lats_grid, lons_grid, lat0, lon0, radius_m):
 def compute_kappa_topo(elev, dx_grid, dy_grid, dist_grid, sz, r86, z86_cm,
                        s_elev=0.0):
     """
+    .. deprecated::
+        Use :func:`kappa_topo_3d.compute_kappa_topo_3d` instead.
+        This function uses a simplified DEM-cell summation approach;
+        ``compute_kappa_topo_3d`` implements a physically correct 3-D
+        ray-casting algorithm that supersedes it.
+
     Compute kappa_topo by summing DEM pixel contributions.
 
     Reference slab: vertical cylinder of radius r86 centred on sensor,
@@ -265,6 +272,12 @@ def compute_kappa_topo(elev, dx_grid, dy_grid, dist_grid, sz, r86, z86_cm,
 
     Returns kappa and a 2D weight map for plotting.
     """
+    warnings.warn(
+        "compute_kappa_topo is deprecated and will be removed in a future version. "
+        "Use compute_kappa_topo_3d from kappa_topo_3d instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     z86_m     = z86_cm / 100.0
     
     MAX_DEPTH = 2.0 # meters
@@ -497,13 +510,16 @@ def main():
     print(f"   r86 (at site)   : {r86:.1f} m")
     print(f"   z86 (at site)   : {z86:.2f} cm")
 
-    # 3 — kappa_topo by DEM-cell summation
-    print("\n[3] Computing kappa_topo (DEM-cell summation) ...")
+    # 3 — kappa_topo by 3-D ray-casting
+    print("\n[3] Computing kappa_topo (3-D ray-casting) ...")
     t1 = time.perf_counter()
-    kappa_topo, wmap = compute_kappa_topo(
-        elev, dx_grid, dy_grid, dist_grid, sz, r86, z86, s_elev=s_elev)
+    kappa_topo, kappa_pieno, kappa_sopra, kappa_vuoto, wmap, kappa_info = \
+        compute_kappa_topo_3d(
+            elev, dx_grid, dy_grid, dist_grid,
+            sz, s_elev, r86, z86, RHO_BULK, SENSOR_HEIGHT_M)
     kappa_topo_label = kappa_topo
-    print(f"   kappa_topo = {kappa_topo:.4f}   elapsed={time.perf_counter()-t1:.1f}s")
+    print(report_kappa_3d(kappa_topo, kappa_pieno, kappa_sopra, kappa_vuoto, kappa_info))
+    print(f"   elapsed={time.perf_counter()-t1:.1f}s")
     V0   = np.pi * r86**2 * (z86/100.0)
     Veff = V0 * kappa_topo
 
