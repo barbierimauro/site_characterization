@@ -591,7 +591,7 @@ def get_site_climate(
         panel_azimuth_deg       = panel_azimuth_deg,
         panel_efficiency        = panel_efficiency,
         horizon_source          = horizon_source,
-        data_source_radiation   = str(meta.get('inputs', {})
+        data_source_radiation   = str((meta or {}).get('inputs', {})
                                       .get('meteo_data', {})
                                       .get('radiation_db', 'PVGIS')),
         data_source_precip      = 'ERA5 via Open-Meteo ~31km',
