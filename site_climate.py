@@ -293,13 +293,12 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020,
         if cached is not None:
             return cached
 
-    url = "https://climate-api.open-meteo.com/v1/climate"
+    url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "latitude"         : lat,
         "longitude"        : lon,
         "start_date"       : f"{startyear}-01-01",
         "end_date"         : f"{endyear}-12-31",
-        "models"           : "ERA5",
         "daily"            : "precipitation_sum",
     }
     resp = requests.get(url, params=params, timeout=60)
