@@ -2,6 +2,14 @@
 # REPORT
 # =============================================================================
 
+import numpy as np
+from kappa_topo_3d      import report_kappa_3d
+from site_fluxes        import report_site_fluxes
+from site_climate       import report_site_climate
+from terrain_indices    import report_twi, report_thermal_index
+from get_soil_properties import report_soil_properties
+
+
 def write_report(path, params, results):
     W = 72
     L = []
@@ -75,6 +83,38 @@ def write_report(path, params, results):
     s(f"    = theta_v_apparent / kappa_topo")
     s(f"  SM relative bias     : {(results['kappa_topo']-1)*100:+.1f} %")
     s(f"    (positive = overestimate, negative = underestimate)")
+    s()
+
+    h("KAPPA_TOPO 3-D RAY-CASTING DETAIL")
+    s(report_kappa_3d(
+        results['kappa_topo'], results['kappa_pieno'],
+        results['kappa_sopra'], results['kappa_vuoto'],
+        results['kappa_info']))
+    s()
+
+    h("SITE FLUXES")
+    s(report_site_fluxes(results['site_fluxes']))
+    s()
+
+    h("SITE CLIMATE")
+    s(report_site_climate(results['site_climate']))
+    s()
+
+    h("SOIL PROPERTIES")
+    s(report_soil_properties(results['soil']))
+    s()
+
+    h("TOPOGRAPHIC WETNESS INDEX")
+    s(report_twi(results['twi']))
+    s()
+
+    h("THERMAL INDEX")
+    sc = results['site_climate']
+    s(report_thermal_index(
+        results['thermal'],
+        sc['T_mean_monthly_C'],
+        sc['T_min_monthly_C'],
+        sc['T_max_monthly_C']))
     s()
 
     h("OUTPUT FILES — DESCRIPTION")

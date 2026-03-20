@@ -611,6 +611,8 @@ def main():
         r86_sealevel=r86_sea, r86=r86, z86=z86,
         V0=V0, Veff=Veff,
         kappa_topo=kappa_topo, kappa_muon=kappa_muon, kappa_total=kappa_tot,
+        kappa_pieno=kappa_pieno, kappa_sopra=kappa_sopra,
+        kappa_vuoto=kappa_vuoto, kappa_info=kappa_info,
         theta_v_corrected=theta_v_corr,
         site_fluxes=site_fluxes,
         site_climate=site_climate,
