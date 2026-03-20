@@ -210,12 +210,21 @@ def _lattice_water(clay_pct):
 
 
 def _parse_soilgrids_tiff(content):
-    """Estrae il valore del pixel singolo da un GeoTIFF 1×1 di SoilGrids WCS."""
+    """
+    Estrae il valore dal pixel centrale di un GeoTIFF SoilGrids WCS.
+    Verifica il magic TIFF prima di tentare PIL; in caso di risposta XML
+    (errore server) restituisce None invece di propagare un'eccezione.
+    """
+    # Magic bytes TIFF: 'II' (little-endian) o 'MM' (big-endian)
+    if len(content) < 4 or content[:2] not in (b'II', b'MM'):
+        return None   # risposta XML di errore, non un TIFF
     try:
         from PIL import Image
         import io as _io
         arr = np.array(Image.open(_io.BytesIO(content)))
-        val = float(arr.flat[0])
+        # Pixel centrale (la risposta può essere un piccolo raster, non 1×1)
+        r, c = arr.shape[0] // 2, arr.shape[1] // 2
+        val  = float(arr[r, c])
         return None if val <= -32767 else val
     except Exception:
         return None
@@ -226,28 +235,34 @@ def _fetch_soilgrids_wcs(lat, lon, timeout_s=60):
     Fetch SoilGrids v2.0 via WCS (maps.isric.org) — fallback quando
     rest.soilgrids.org non è raggiungibile.
 
+    Usa il formato corretto ISRIC WCS 2.0.1:
+      SUBSET=long(lon0,lon1)  SUBSET=lat(lat0,lat1)
+      SUBSETTINGCRS=EPSG:4326  FORMAT=GEOTIFF_INT16
+
     Ritorna un dict layer_by_name compatibile con _parse_layer().
-    Richiede ~54 request HTTP in parallelo (max 20 worker).
+    Esegue ~54 request in parallelo (max 20 worker).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    eps  = 0.005
-    bbox = f"{lon - eps:.6f},{lat - eps:.6f},{lon + eps:.6f},{lat + eps:.6f}"
+    eps  = 0.005   # ±0.005° ≈ ±500 m; copre ≥1 pixel SoilGrids a 250 m
+    lon0, lon1 = lon - eps, lon + eps
+    lat0, lat1 = lat - eps, lat + eps
 
     def fetch_one(prop, depth_label):
-        url    = f"https://maps.isric.org/mapserv?map=/map/{prop}.map"
-        params = {
-            "SERVICE"    : "WCS",
-            "VERSION"    : "2.0.1",
-            "REQUEST"    : "GetCoverage",
-            "COVERAGEID" : f"{prop}_{depth_label}_mean",
-            "CRS"        : "urn:ogc:def:crs:EPSG::4326",
-            "BBOX"       : bbox,
-            "WIDTH"      : "1",
-            "HEIGHT"     : "1",
-            "FORMAT"     : "image/tiff",
-        }
-        resp = requests.get(url, params=params, timeout=timeout_s)
+        # requests accetta lista di tuple → supporta chiavi duplicate (SUBSET×2)
+        params = [
+            ("map",           f"/map/{prop}.map"),
+            ("SERVICE",       "WCS"),
+            ("VERSION",       "2.0.1"),
+            ("REQUEST",       "GetCoverage"),
+            ("COVERAGEID",    f"{prop}_{depth_label}_mean"),
+            ("FORMAT",        "GEOTIFF_INT16"),
+            ("SUBSETTINGCRS", "urn:ogc:def:crs:EPSG::4326"),
+            ("SUBSET",        f"long({lon0:.6f},{lon1:.6f})"),
+            ("SUBSET",        f"lat({lat0:.6f},{lat1:.6f})"),
+        ]
+        resp = requests.get("https://maps.isric.org/mapserv",
+                            params=params, timeout=timeout_s)
         resp.raise_for_status()
         return _parse_soilgrids_tiff(resp.content)
 
@@ -261,7 +276,8 @@ def _fetch_soilgrids_wcs(lat, lon, timeout_s=60):
             p, d = futures[fut]
             try:
                 val = fut.result()
-            except Exception:
+            except Exception as exc:
+                print(f"   WCS warn: {p} {d} — {exc}", flush=True)
                 val = None
             raw.setdefault(p, {})[d] = val
 
