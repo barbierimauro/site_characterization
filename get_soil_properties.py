@@ -209,6 +209,75 @@ def _lattice_water(clay_pct):
     return float(0.097 * (clay_pct / 100.0) + 0.033)
 
 
+def _parse_soilgrids_tiff(content):
+    """Estrae il valore del pixel singolo da un GeoTIFF 1×1 di SoilGrids WCS."""
+    try:
+        from PIL import Image
+        import io as _io
+        arr = np.array(Image.open(_io.BytesIO(content)))
+        val = float(arr.flat[0])
+        return None if val <= -32767 else val
+    except Exception:
+        return None
+
+
+def _fetch_soilgrids_wcs(lat, lon, timeout_s=60):
+    """
+    Fetch SoilGrids v2.0 via WCS (maps.isric.org) — fallback quando
+    rest.soilgrids.org non è raggiungibile.
+
+    Ritorna un dict layer_by_name compatibile con _parse_layer().
+    Richiede ~54 request HTTP in parallelo (max 20 worker).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    eps  = 0.005
+    bbox = f"{lon - eps:.6f},{lat - eps:.6f},{lon + eps:.6f},{lat + eps:.6f}"
+
+    def fetch_one(prop, depth_label):
+        url    = f"https://maps.isric.org/mapserv?map=/map/{prop}.map"
+        params = {
+            "SERVICE"    : "WCS",
+            "VERSION"    : "2.0.1",
+            "REQUEST"    : "GetCoverage",
+            "COVERAGEID" : f"{prop}_{depth_label}_mean",
+            "CRS"        : "urn:ogc:def:crs:EPSG::4326",
+            "BBOX"       : bbox,
+            "WIDTH"      : "1",
+            "HEIGHT"     : "1",
+            "FORMAT"     : "image/tiff",
+        }
+        resp = requests.get(url, params=params, timeout=timeout_s)
+        resp.raise_for_status()
+        return _parse_soilgrids_tiff(resp.content)
+
+    raw = {}
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        futures = {
+            ex.submit(fetch_one, p, d): (p, d)
+            for p in PROPERTIES for d in DEPTH_LABELS
+        }
+        for fut in as_completed(futures):
+            p, d = futures[fut]
+            try:
+                val = fut.result()
+            except Exception:
+                val = None
+            raw.setdefault(p, {})[d] = val
+
+    # Costruisce dict compatibile con _parse_layer()
+    layer_by_name = {}
+    for prop in PROPERTIES:
+        depths_list = [
+            {'label': d,
+             'values': {'mean': raw.get(prop, {}).get(d), 'uncertainty': None}}
+            for d in DEPTH_LABELS
+        ]
+        layer_by_name[prop] = {'name': prop, 'depths': depths_list}
+
+    return layer_by_name
+
+
 def _parse_layer(layer_json, cf):
     """
     Estrae valori da un layer SoilGrids e applica la conversione unità.
@@ -314,17 +383,19 @@ def get_soil_properties(
         'value'    : 'mean,uncertainty',
     }
 
-    resp = requests.get(SOILGRIDS_URL, params=params, timeout=timeout_s)
-    resp.raise_for_status()
-    data = resp.json()
-
-    # ------------------------------------------------------------------ #
-    # 2. Parsing risposta
-    # ------------------------------------------------------------------ #
-    layers_json = data['properties']['layers']
-
-    # Indicizza per nome proprietà
-    layer_by_name = {lay['name']: lay for lay in layers_json}
+    wrb_class = 'N/A'
+    try:
+        resp = requests.get(SOILGRIDS_URL, params=params, timeout=timeout_s)
+        resp.raise_for_status()
+        data = resp.json()
+        layers_json   = data['properties']['layers']
+        layer_by_name = {lay['name']: lay for lay in layers_json}
+        wrb_class     = data.get('wrb_class_name', 'N/A')
+    except (requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout) as exc:
+        print(f"   REST non raggiungibile ({exc.__class__.__name__}),"
+              " fallback WCS maps.isric.org ...", flush=True)
+        layer_by_name = _fetch_soilgrids_wcs(lat, lon, timeout_s)
 
     # ------------------------------------------------------------------ #
     # 3. Estrai profili per ogni proprietà
@@ -403,7 +474,7 @@ def get_soil_properties(
     # ------------------------------------------------------------------ #
     # 8. WRB soil class (se disponibile nella risposta)
     # ------------------------------------------------------------------ #
-    result['wrb_class'] = data.get('wrb_class_name', 'N/A')
+    result['wrb_class'] = wrb_class
 
     # ------------------------------------------------------------------ #
     # 9. Metadata
