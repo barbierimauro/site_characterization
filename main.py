@@ -77,6 +77,8 @@ from matplotlib.gridspec import GridSpec
 import requests, os, json, hashlib, time, math
 import multiprocessing as mp
 from kappa_topo_3d import compute_kappa_topo_3d, report_kappa_3d
+from site_fluxes   import compute_site_fluxes, report_site_fluxes
+from site_climate  import get_site_climate, report_site_climate
 
 try:
     import rasterio
@@ -537,13 +539,25 @@ def main():
           f"max_horizon={horizon.max():.1f}deg  "
           f"mean_horizon={horizon.mean():.1f}deg")
 
-    # 6 — Neutron FOV per-azimuth
-    print("\n[6] Computing neutron per-azimuth r_eff ...")
+    # 6 — Site fluxes & N0
+    print("\n[6] Computing site fluxes ...")
+    site_fluxes = compute_site_fluxes(LAT, LON, s_elev, kappa_topo, kappa_muon)
+    print(report_site_fluxes(site_fluxes))
+
+    # 7 — Site climate
+    print("\n[7] Fetching site climate (PVGIS + Open-Meteo) ...")
+    site_climate = get_site_climate(
+        LAT, LON, s_elev,
+        horizon_deg=horizon, azimuths_deg=azimuths)
+    print(report_site_climate(site_climate))
+
+    # 8 — Neutron FOV per-azimuth
+    print("\n[8] Computing neutron per-azimuth r_eff ...")
     az_neutron, overlap_az, deficit_az = compute_neutron_fov(
         elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86,
         AZIMUTH_STEP_DEG, DEM_RADIUS_M)
 
-    # 7 — Mean slope
+    # 9 — Mean slope
     nr, nc = elev.shape
     dpx = abs(np.nanmedian(np.diff(dx_grid[nr//2,:])))
     dpy = abs(np.nanmedian(np.diff(dy_grid[:,nc//2])))
@@ -565,6 +579,8 @@ def main():
         V0=V0, Veff=Veff,
         kappa_topo=kappa_topo, kappa_muon=kappa_muon, kappa_total=kappa_tot,
         theta_v_corrected=theta_v_corr,
+        site_fluxes=site_fluxes,
+        site_climate=site_climate,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -575,13 +591,13 @@ def main():
         omega="n/a", tol="n/a",
     )
 
-    # 8 — Report
+    # 10 — Report
     rpt = _outpath("crns_report.txt")
-    print(f"\n[7] Writing report -> {rpt}")
+    print(f"\n[10] Writing report -> {rpt}")
     print(write_report(rpt, params, results))
 
-    # 9 — Plots
-    print("[8] Generating plots ...")
+    # 11 — Plots
+    print("[11] Generating plots ...")
     plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
               results, _outpath("crns_topo_main.png"))
     plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86,
