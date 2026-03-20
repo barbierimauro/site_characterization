@@ -252,6 +252,9 @@ def _compute_poa(tmy, lat, panel_tilt_deg, panel_azimuth_deg):
     # Posizione solare
     solpos = loc.get_solarposition(tmy.index)
 
+    # Irradianza solare extraterrestre (richiesta dal modello Perez)
+    dni_extra = pvlib.irradiance.get_extra_radiation(tmy.index)
+
     # Trasposizione GHI -> POA (modello Perez)
     poa = pvlib.irradiance.get_total_irradiance(
         surface_tilt    = panel_tilt_deg,
@@ -262,6 +265,7 @@ def _compute_poa(tmy, lat, panel_tilt_deg, panel_azimuth_deg):
         ghi  = tmy['ghi'],
         dhi  = tmy['dhi'],
         model='perez',
+        dni_extra=dni_extra,
     )
     return poa['poa_global']
 
