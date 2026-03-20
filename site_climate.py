@@ -178,8 +178,9 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
     Scarica precipitazioni giornaliere storiche da Open-Meteo Climate API
     (sorgente ERA5, risoluzione ~31 km).
 
-    Ritorna array (12,) con precipitazione mensile media [mm/mese]
-    e array (12,) con giorni medi di pioggia per mese (precip > 1 mm).
+    Ritorna array (12,) con precipitazione mensile media [mm/mese],
+    array (12,) con giorni medi di pioggia per mese (precip > 1 mm),
+    e quota della cella ERA5 [m] (campo 'elevation' nella risposta JSON).
     """
     url = "https://climate-api.open-meteo.com/v1/climate"
     params = {
@@ -193,6 +194,8 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
     resp = requests.get(url, params=params, timeout=60)
     resp.raise_for_status()
     data = resp.json()
+
+    era5_elevation_m = float(data.get('elevation', float('nan')))
 
     import pandas as pd
     dates  = pd.to_datetime(data['daily']['time'])
@@ -212,7 +215,7 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
     rainy_mean    = rainy_monthly.groupby(
                         rainy_monthly.index.month).mean().values
 
-    return monthly_mean, rainy_mean
+    return monthly_mean, rainy_mean, era5_elevation_m
 
 
 # ---------------------------------------------------------------------------
@@ -404,8 +407,8 @@ def get_site_climate(
     # ------------------------------------------------------------------ #
     # 8. Precipitazioni — Open-Meteo
     # ------------------------------------------------------------------ #
-    precip_monthly, rainy_days_monthly = _get_precipitation_openmeteo(
-        lat, lon, startyear=startyear, endyear=endyear)
+    precip_monthly, rainy_days_monthly, era5_elevation_m = \
+        _get_precipitation_openmeteo(lat, lon, startyear=startyear, endyear=endyear)
 
     # ------------------------------------------------------------------ #
     # 9. Scalari annuali
@@ -463,6 +466,9 @@ def get_site_climate(
                                    enumerate(precip_monthly) if v < 30],
         wet_months              = [MONTHS[i] for i,v in
                                    enumerate(precip_monthly) if v > 100],
+
+        # --- ERA5 grid ---
+        era5_elevation_m        = era5_elevation_m,
 
         # --- Metadata ---
         panel_tilt_deg          = panel_tilt_deg,
