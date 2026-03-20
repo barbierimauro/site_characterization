@@ -83,6 +83,7 @@ from terrain_indices    import (compute_twi, report_twi,
                                 compute_thermal_index, report_thermal_index)
 from get_soil_properties import get_soil_properties, report_soil_properties
 from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail)
+from reports import write_report
 
 try:
     import rasterio
