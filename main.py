@@ -552,12 +552,13 @@ def main():
     print("\n[7] Fetching site climate (PVGIS + Open-Meteo) ...")
     site_climate = get_site_climate(
         LAT, LON, s_elev,
-        horizon_deg=horizon, azimuths_deg=azimuths)
+        horizon_deg=horizon, azimuths_deg=azimuths,
+        cache_dir=_OUT)
     print(report_site_climate(site_climate))
 
     # 8 — Soil properties (SoilGrids)
     print("\n[8] Fetching soil properties (SoilGrids) ...")
-    soil = get_soil_properties(LAT, LON, z86_cm=z86)
+    soil = get_soil_properties(LAT, LON, z86_cm=z86, cache_dir=_OUT)
     print(report_soil_properties(soil))
 
     # 9 — Topographic Wetness Index

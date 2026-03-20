@@ -31,6 +31,7 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import requests
+import hashlib, json, os
 from datetime import datetime, date
 
 
@@ -45,6 +46,88 @@ MONTHS = ['Jan','Feb','Mar','Apr','May','Jun',
 # (usati internamente da pvlib.temperature.faiman)
 FAIMAN_U0 = 25.0   # W m-2 K-1
 FAIMAN_U1 = 6.84   # W m-2 K-1 (m/s)-1
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _cache_key(*parts):
+    tag = "_".join(str(p) for p in parts)
+    return hashlib.sha256(tag.encode()).hexdigest()[:16]
+
+
+# --- PVGIS cache ---
+
+def _pvgis_cache_paths(lat, lon, startyear, endyear, horizon_hash, cache_dir):
+    key = _cache_key(f"{lat:.6f}", f"{lon:.6f}", startyear, endyear, horizon_hash)
+    base = os.path.join(cache_dir, f"pvgis_cache_{key}")
+    return base + ".csv", base + ".json"
+
+
+def _save_pvgis_cache(tmy, lat, lon, startyear, endyear, horizon_hash, cache_dir):
+    csv_path, meta_path = _pvgis_cache_paths(
+        lat, lon, startyear, endyear, horizon_hash, cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+    tmy.to_csv(csv_path)
+    with open(meta_path, "w") as f:
+        json.dump(dict(lat=lat, lon=lon, startyear=startyear, endyear=endyear,
+                       horizon_hash=horizon_hash), f)
+    print(f"   PVGIS cached -> {csv_path}", flush=True)
+
+
+def _load_pvgis_cache(lat, lon, startyear, endyear, horizon_hash, cache_dir):
+    import pandas as pd
+    csv_path, meta_path = _pvgis_cache_paths(
+        lat, lon, startyear, endyear, horizon_hash, cache_dir)
+    if not (os.path.exists(csv_path) and os.path.exists(meta_path)):
+        return None
+    with open(meta_path) as f:
+        m = json.load(f)
+    if (abs(m["lat"] - lat) > 1e-7 or abs(m["lon"] - lon) > 1e-7
+            or m["startyear"] != startyear or m["endyear"] != endyear
+            or m["horizon_hash"] != horizon_hash):
+        return None
+    print(f"   PVGIS loaded from cache: {csv_path}", flush=True)
+    tmy = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+    return tmy
+
+
+# --- Open-Meteo precipitation cache ---
+
+def _precip_cache_path(lat, lon, startyear, endyear, cache_dir):
+    key = _cache_key(f"{lat:.6f}", f"{lon:.6f}", startyear, endyear)
+    return os.path.join(cache_dir, f"precip_cache_{key}.json")
+
+
+def _save_precip_cache(monthly_mean, rainy_mean, era5_elevation_m,
+                       lat, lon, startyear, endyear, cache_dir):
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _precip_cache_path(lat, lon, startyear, endyear, cache_dir)
+    payload = dict(
+        lat=lat, lon=lon, startyear=startyear, endyear=endyear,
+        monthly_mean=list(monthly_mean),
+        rainy_mean=list(rainy_mean),
+        era5_elevation_m=era5_elevation_m,
+    )
+    with open(path, "w") as f:
+        json.dump(payload, f)
+    print(f"   Open-Meteo precip cached -> {path}", flush=True)
+
+
+def _load_precip_cache(lat, lon, startyear, endyear, cache_dir):
+    path = _precip_cache_path(lat, lon, startyear, endyear, cache_dir)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        d = json.load(f)
+    if (abs(d["lat"] - lat) > 1e-7 or abs(d["lon"] - lon) > 1e-7
+            or d["startyear"] != startyear or d["endyear"] != endyear):
+        return None
+    print(f"   Open-Meteo precip loaded from cache: {path}", flush=True)
+    return (np.array(d["monthly_mean"]),
+            np.array(d["rainy_mean"]),
+            float(d["era5_elevation_m"]))
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +198,25 @@ def _reample_horizon_for_pvgis(horizon_deg, azimuths_deg, n_pvgis=36):
     return [round(float(h), 2) for h in h_interp]
 
 
-def _get_pvgis_tmy(lat, lon, userhorizon=None, startyear=2005, endyear=2020):
+def _get_pvgis_tmy(lat, lon, userhorizon=None, startyear=2005, endyear=2020,
+                   cache_dir=None):
     """
     Scarica TMY da PVGIS via pvlib.
     Ritorna DataFrame orario con colonne pvlib standard.
     """
+    # Cache key include un hash dell'orizzonte (se fornito)
+    if userhorizon is not None:
+        h_str = "_".join(f"{v:.2f}" for v in userhorizon)
+        horizon_hash = hashlib.sha256(h_str.encode()).hexdigest()[:12]
+    else:
+        horizon_hash = "nohorizon"
+
+    if cache_dir is not None:
+        tmy = _load_pvgis_cache(lat, lon, startyear, endyear,
+                                horizon_hash, cache_dir)
+        if tmy is not None:
+            return tmy, None   # meta non usato a valle
+
     import pvlib
     kwargs = dict(
         map_variables=True,
@@ -132,6 +229,10 @@ def _get_pvgis_tmy(lat, lon, userhorizon=None, startyear=2005, endyear=2020):
         kwargs['userhorizon'] = userhorizon
 
     tmy, meta = pvlib.iotools.get_pvgis_tmy(lat, lon, **kwargs)
+
+    if cache_dir is not None:
+        _save_pvgis_cache(tmy, lat, lon, startyear, endyear,
+                          horizon_hash, cache_dir)
     return tmy, meta
 
 
@@ -173,7 +274,8 @@ def _compute_cell_temp(poa_global, temp_air, wind_speed):
     return temp_air + poa_global / (FAIMAN_U0 + FAIMAN_U1 * wind_speed)
 
 
-def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
+def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020,
+                                  cache_dir=None):
     """
     Scarica precipitazioni giornaliere storiche da Open-Meteo Climate API
     (sorgente ERA5, risoluzione ~31 km).
@@ -182,6 +284,11 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
     array (12,) con giorni medi di pioggia per mese (precip > 1 mm),
     e quota della cella ERA5 [m] (campo 'elevation' nella risposta JSON).
     """
+    if cache_dir is not None:
+        cached = _load_precip_cache(lat, lon, startyear, endyear, cache_dir)
+        if cached is not None:
+            return cached
+
     url = "https://climate-api.open-meteo.com/v1/climate"
     params = {
         "latitude"         : lat,
@@ -215,6 +322,9 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
     rainy_mean    = rainy_monthly.groupby(
                         rainy_monthly.index.month).mean().values
 
+    if cache_dir is not None:
+        _save_precip_cache(monthly_mean, rainy_mean, era5_elevation_m,
+                           lat, lon, startyear, endyear, cache_dir)
     return monthly_mean, rainy_mean, era5_elevation_m
 
 
@@ -233,6 +343,7 @@ def get_site_climate(
     panel_azimuth_deg = 180.0,  # 180 = sud
     startyear         = 2005,
     endyear           = 2020,
+    cache_dir         = None,   # directory per cache locale dei dati scaricati
 ):
     """
     Caratterizzazione climatica completa di un sito CRNS.
@@ -336,7 +447,8 @@ def get_site_climate(
     tmy, meta = _get_pvgis_tmy(lat, lon,
                                 userhorizon=userhorizon,
                                 startyear=startyear,
-                                endyear=endyear)
+                                endyear=endyear,
+                                cache_dir=cache_dir)
 
     # Pressione: PVGIS restituisce Pa -> converti in hPa
     tmy['pressure_hpa'] = tmy['pressure'] / 100.0
@@ -408,7 +520,8 @@ def get_site_climate(
     # 8. Precipitazioni — Open-Meteo
     # ------------------------------------------------------------------ #
     precip_monthly, rainy_days_monthly, era5_elevation_m = \
-        _get_precipitation_openmeteo(lat, lon, startyear=startyear, endyear=endyear)
+        _get_precipitation_openmeteo(lat, lon, startyear=startyear, endyear=endyear,
+                                     cache_dir=cache_dir)
 
     # ------------------------------------------------------------------ #
     # 9. Scalari annuali

@@ -54,6 +54,7 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import requests
+import hashlib, json, os
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,66 @@ import requests
 # ---------------------------------------------------------------------------
 
 SOILGRIDS_URL    = "https://rest.soilgrids.org/soilgrids/v2.0/properties/query"
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _to_serializable(obj):
+    """Converti ricorsivamente numpy types in tipi JSON-serializzabili."""
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_serializable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    return obj
+
+
+def _from_serializable(obj):
+    """Riconverti liste in numpy array dove i valori della chiave lo indicano."""
+    if isinstance(obj, dict):
+        return {k: _from_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        # Liste di numeri → array numpy
+        if obj and isinstance(obj[0], (int, float)):
+            return np.array(obj)
+        return [_from_serializable(v) for v in obj]
+    return obj
+
+
+def _soil_cache_path(lat, lon, z86_cm, cache_dir):
+    tag = f"{lat:.6f}_{lon:.6f}_{z86_cm:.2f}"
+    key = hashlib.sha256(tag.encode()).hexdigest()[:16]
+    return os.path.join(cache_dir, f"soil_cache_{key}.json")
+
+
+def _save_soil_cache(result, lat, lon, z86_cm, cache_dir):
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _soil_cache_path(lat, lon, z86_cm, cache_dir)
+    payload = dict(lat=lat, lon=lon, z86_cm=z86_cm,
+                   data=_to_serializable(result))
+    with open(path, "w") as f:
+        json.dump(payload, f)
+    print(f"   SoilGrids cached -> {path}", flush=True)
+
+
+def _load_soil_cache(lat, lon, z86_cm, cache_dir):
+    path = _soil_cache_path(lat, lon, z86_cm, cache_dir)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        d = json.load(f)
+    if (abs(d["lat"] - lat) > 1e-7 or abs(d["lon"] - lon) > 1e-7
+            or abs(d["z86_cm"] - z86_cm) > 0.01):
+        return None
+    print(f"   SoilGrids loaded from cache: {path}", flush=True)
+    return _from_serializable(d["data"])
 
 LAMBDA_S_GCM2    = 162.0    # attenuation length in soil [g/cm²]
 
@@ -186,6 +247,7 @@ def get_soil_properties(
     z86_cm      = 16.0,    # profondità di penetrazione neutroni [cm]
                             # usata per calcolare i pesi degli strati
     timeout_s   = 60,
+    cache_dir   = None,    # directory per cache locale
 ):
     """
     Recupera le proprietà del suolo da SoilGrids v2.0 per il punto (lat, lon).
@@ -232,6 +294,11 @@ def get_soil_properties(
         'source'             : str
         'soilgrids_version'  : str
     """
+
+    if cache_dir is not None:
+        cached = _load_soil_cache(lat, lon, z86_cm, cache_dir)
+        if cached is not None:
+            return cached
 
     # ------------------------------------------------------------------ #
     # 1. Chiamata API SoilGrids
@@ -349,6 +416,8 @@ def get_soil_properties(
     result['source']           = 'SoilGrids v2.0 ISRIC 250m'
     result['soilgrids_version']= '2.0'
 
+    if cache_dir is not None:
+        _save_soil_cache(result, lat, lon, z86_cm, cache_dir)
     return result
 
 
