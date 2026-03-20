@@ -77,8 +77,11 @@ from matplotlib.gridspec import GridSpec
 import requests, os, json, hashlib, time, math
 import multiprocessing as mp
 from kappa_topo_3d import compute_kappa_topo_3d, report_kappa_3d
-from site_fluxes   import compute_site_fluxes, report_site_fluxes
-from site_climate  import get_site_climate, report_site_climate
+from site_fluxes        import compute_site_fluxes, report_site_fluxes
+from site_climate       import get_site_climate, report_site_climate
+from terrain_indices    import (compute_twi, report_twi,
+                                compute_thermal_index, report_thermal_index)
+from get_soil_properties import get_soil_properties, report_soil_properties
 
 try:
     import rasterio
@@ -551,13 +554,43 @@ def main():
         horizon_deg=horizon, azimuths_deg=azimuths)
     print(report_site_climate(site_climate))
 
-    # 8 — Neutron FOV per-azimuth
+    # 8 — Soil properties (SoilGrids)
+    print("\n[8] Fetching soil properties (SoilGrids) ...")
+    soil = get_soil_properties(LAT, LON, z86_cm=z86)
+    print(report_soil_properties(soil))
+
+    # 9 — Topographic Wetness Index
+    print("\n[9] Computing TWI ...")
+    twi = compute_twi(elev, dx_grid, dy_grid, dist_grid, r86)
+    print(report_twi(twi))
+
+    # 10 — Thermal index
+    print("\n[10] Computing thermal index ...")
+    # era5_elevation_m non è ancora esposto da get_site_climate:
+    # si usa s_elev come fallback (delta_elevation = 0, nessuna correzione lapse)
+    era5_elev = site_climate.get('era5_elevation_m', s_elev)
+    thermal = compute_thermal_index(
+        elev, dist_grid, s_elev,
+        horizon_deg       = horizon,
+        azimuths_deg      = azimuths,
+        T_mean_monthly_era5 = site_climate['T_mean_monthly_C'],
+        T_min_monthly_era5  = site_climate['T_min_monthly_C'],
+        T_max_monthly_era5  = site_climate['T_max_monthly_C'],
+        POA_monthly_kWh_m2  = site_climate['POA_monthly_kWh_m2'],
+        era5_elevation_m    = era5_elev,
+    )
+    print(report_thermal_index(thermal,
+                               site_climate['T_mean_monthly_C'],
+                               site_climate['T_min_monthly_C'],
+                               site_climate['T_max_monthly_C']))
+
+    # 11 — Neutron FOV per-azimuth
     print("\n[8] Computing neutron per-azimuth r_eff ...")
     az_neutron, overlap_az, deficit_az = compute_neutron_fov(
         elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86,
         AZIMUTH_STEP_DEG, DEM_RADIUS_M)
 
-    # 9 — Mean slope
+    # 12 — Mean slope
     nr, nc = elev.shape
     dpx = abs(np.nanmedian(np.diff(dx_grid[nr//2,:])))
     dpy = abs(np.nanmedian(np.diff(dy_grid[:,nc//2])))
@@ -581,6 +614,9 @@ def main():
         theta_v_corrected=theta_v_corr,
         site_fluxes=site_fluxes,
         site_climate=site_climate,
+        soil=soil,
+        twi=twi,
+        thermal=thermal,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -591,13 +627,13 @@ def main():
         omega="n/a", tol="n/a",
     )
 
-    # 10 — Report
+    # 13 — Report
     rpt = _outpath("crns_report.txt")
-    print(f"\n[10] Writing report -> {rpt}")
+    print(f"\n[13] Writing report -> {rpt}")
     print(write_report(rpt, params, results))
 
-    # 11 — Plots
-    print("[11] Generating plots ...")
+    # 14 — Plots
+    print("[14] Generating plots ...")
     plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
               results, _outpath("crns_topo_main.png"))
     plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86,
