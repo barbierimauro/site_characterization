@@ -111,6 +111,19 @@ def _save_soil_cache(result, lat, lon, z86_cm, cache_dir):
     print(f"   SoilGrids cached -> {path}", flush=True)
 
 
+def _cache_is_valid(data):
+    """
+    Restituisce False se il risultato in cache ha tutti i valori NaN
+    (run precedente fallita), in modo da forzare un nuovo fetch.
+    """
+    for prop in ('bdod', 'clay', 'sand'):
+        key = f'{prop}_crns'
+        v = data.get(key)
+        if v is not None and not (isinstance(v, float) and np.isnan(v)):
+            return True
+    return False
+
+
 def _load_soil_cache(lat, lon, z86_cm, cache_dir):
     path = _soil_cache_path(lat, lon, z86_cm, cache_dir)
     if not os.path.exists(path):
@@ -120,8 +133,14 @@ def _load_soil_cache(lat, lon, z86_cm, cache_dir):
     if (abs(d["lat"] - lat) > 1e-7 or abs(d["lon"] - lon) > 1e-7
             or abs(d["z86_cm"] - z86_cm) > 0.01):
         return None
+    result = _from_serializable(d["data"])
+    if not _cache_is_valid(result):
+        print(f"   SoilGrids cache invalida (tutti NaN) — nuovo fetch: {path}",
+              flush=True)
+        os.remove(path)
+        return None
     print(f"   SoilGrids loaded from cache: {path}", flush=True)
-    return _from_serializable(d["data"])
+    return result
 
 LAMBDA_S_GCM2    = 162.0    # attenuation length in soil [g/cm²]
 
