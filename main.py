@@ -564,7 +564,7 @@ def main():
 
     # 9 — Topographic Wetness Index
     print("\n[9] Computing TWI ...")
-    twi = compute_twi(elev, dx_grid, dy_grid, dist_grid, r86)
+    twi = compute_twi(elev, dx_grid, dy_grid, dist_grid, r86, n_cores=N_CORES)
     print(report_twi(twi))
 
     # 10 — Thermal index

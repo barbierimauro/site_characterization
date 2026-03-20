@@ -29,6 +29,7 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import heapq
+import multiprocessing as mp
 
 
 # ===========================================================================
@@ -181,6 +182,39 @@ def _twi_classes(twi, n=5):
 
 
 # ===========================================================================
+# WORKER MULTIPROCESSING — TWI
+# ===========================================================================
+
+def _twi_strip_worker(args):
+    """
+    Calcola fill-depressions + D8 + slope + TWI su una strip orizzontale
+    del DEM già ripulita (nessun NaN).
+
+    Parameters
+    ----------
+    args : tuple (strip_clean, dpx, dpy, slope_min_rad)
+        strip_clean  : 2D array float, sottogriglia di elev_clean
+        dpx, dpy     : risoluzione pixel [m] lungo x e y
+        slope_min_rad: pendenza minima [rad]
+
+    Returns
+    -------
+    twi_strip        : 2D array float
+    slope_deg_strip  : 2D array float
+    drain_area_strip : 2D array float  [m]
+    """
+    strip_clean, dpx, dpy, slope_min_rad = args
+    dx_m       = 0.5 * (dpx + dpy)
+    filled     = _fill_depressions(strip_clean)
+    acc        = _flow_accumulation_d8(filled, dx_m)
+    drain_area = acc * dx_m
+    gy, gx     = np.gradient(strip_clean, dpy, dpx)
+    slope_rad  = np.maximum(np.arctan(np.sqrt(gx**2 + gy**2)), slope_min_rad)
+    twi        = np.log(drain_area / np.tan(slope_rad))
+    return twi, np.degrees(slope_rad), drain_area
+
+
+# ===========================================================================
 # FUNZIONE PUBBLICA 1 — TWI
 # ===========================================================================
 
@@ -192,6 +226,7 @@ def compute_twi(
     r86,
     slope_min_rad = 0.001,    # pendenza minima per evitare TWI -> inf [rad]
     n_classes     = 5,        # classi TWI per la mappa
+    n_cores       = 1,        # worker multiprocessing
 ):
     """
     Topographic Wetness Index dal DEM.
@@ -244,24 +279,56 @@ def compute_twi(
     dx_m   = 0.5 * (dpx + dpy)
 
     # ------------------------------------------------------------------ #
-    # Pendenza locale
+    # Pulizia NaN globale (fill con nanmean del DEM intero)
     # ------------------------------------------------------------------ #
     elev_clean = np.where(np.isnan(elev), np.nanmean(elev), elev)
-    gy, gx     = np.gradient(elev_clean, dpy, dpx)
-    slope_rad  = np.arctan(np.sqrt(gx**2 + gy**2))
-    slope_rad  = np.maximum(slope_rad, slope_min_rad)
 
     # ------------------------------------------------------------------ #
-    # Filling depressioni + D8 accumulo
+    # Fill + D8 + slope + TWI  (single o parallel)
     # ------------------------------------------------------------------ #
-    filled      = _fill_depressions(elev_clean)
-    acc         = _flow_accumulation_d8(filled, dx_m)
-    drain_area  = acc * dx_m     # area specifica [m] = n_pixel * larghezza_pixel
+    n_cores = max(1, min(int(n_cores), nr))
 
-    # ------------------------------------------------------------------ #
-    # TWI
-    # ------------------------------------------------------------------ #
-    twi = np.log(drain_area / np.tan(slope_rad))
+    if n_cores == 1:
+        # ------- path single-process (originale) ----------------------- #
+        gy, gx        = np.gradient(elev_clean, dpy, dpx)
+        slope_rad     = np.maximum(np.arctan(np.sqrt(gx**2 + gy**2)), slope_min_rad)
+        filled        = _fill_depressions(elev_clean)
+        acc           = _flow_accumulation_d8(filled, dx_m)
+        drain_area    = acc * dx_m
+        twi           = np.log(drain_area / np.tan(slope_rad))
+        slope_deg_map = np.degrees(slope_rad)
+    else:
+        # ------- path multiprocessing (strip orizzontali con overlap) -- #
+        # L'overlap permette al D8 di ricevere il contributo di flusso
+        # dai pixel a monte appartenenti alla strip adiacente.
+        # Valore empirico: max(20 px, nr/(n_cores*4)).
+        overlap    = min(max(20, nr // (n_cores * 4)), nr // 2)
+        row_splits = np.array_split(np.arange(nr), n_cores)
+
+        strip_args = []
+        boundaries = []   # (full_r0, full_r1, v0_in_strip, v1_in_strip)
+        for rows in row_splits:
+            r0, r1 = int(rows[0]), int(rows[-1]) + 1
+            s0, s1 = max(0, r0 - overlap), min(nr, r1 + overlap)
+            strip_args.append((
+                elev_clean[s0:s1, :].copy(),
+                dpx, dpy, slope_min_rad,
+            ))
+            boundaries.append((r0, r1, r0 - s0, r1 - s0))
+
+        print(f"   TWI: {n_cores} strips (overlap {overlap} px) ...", flush=True)
+        ctx = mp.get_context('fork')
+        with ctx.Pool(n_cores) as pool:
+            results = pool.map(_twi_strip_worker, strip_args)
+
+        twi           = np.full((nr, nc), np.nan)
+        slope_deg_map = np.full((nr, nc), np.nan)
+        drain_area    = np.full((nr, nc), np.nan)
+        for (r0, r1, v0, v1), (twi_s, slope_s, drain_s) in zip(boundaries, results):
+            twi[r0:r1, :]           = twi_s[v0:v1, :]
+            slope_deg_map[r0:r1, :] = slope_s[v0:v1, :]
+            drain_area[r0:r1, :]    = drain_s[v0:v1, :]
+
     twi[np.isnan(elev)] = np.nan
 
     # ------------------------------------------------------------------ #
@@ -290,7 +357,6 @@ def compute_twi(
         for c in range(1, n_classes + 1)
     ])
 
-    slope_deg_map = np.degrees(slope_rad)
     slope_mean_fp = float(np.nanmean(slope_deg_map[fp_mask]))
 
     return dict(
