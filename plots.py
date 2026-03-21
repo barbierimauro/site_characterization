@@ -384,3 +384,134 @@ def plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
         plt.close(fig)
     print(f"  Saved: {path}")
 
+
+
+# ── helpers shared by new plot functions ─────────────────────────────────────
+_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun',
+           'Jul','Aug','Sep','Oct','Nov','Dec']
+_MX = np.arange(1, 13)
+
+
+def plot_climate(site_climate, thermal, path, lat, lon, sensor_alt):
+    """Six-panel climate summary: radiation, temperature, precipitation,
+    wind, relative humidity, pressure — all monthly."""
+    sc = site_climate
+    th = thermal or {}
+
+    def _a(d, key, fill=np.nan):
+        v = d.get(key)
+        return np.asarray(v, dtype=float) if v is not None else np.full(12, fill)
+
+    with plt.rc_context(STYLE):
+        fig = plt.figure(figsize=(20, 18))
+        gs  = GridSpec(3, 2, figure=fig, hspace=0.48, wspace=0.35)
+
+        # (0,0) Solar radiation
+        ax  = fig.add_subplot(gs[0, 0])
+        ghi = _a(sc, 'GHI_monthly_kWh_m2')
+        dni = _a(sc, 'DNI_monthly_kWh_m2')
+        dhi = _a(sc, 'DHI_monthly_kWh_m2')
+        poa = _a(sc, 'POA_monthly_kWh_m2')
+        w   = 0.25
+        ax.bar(_MX - w, ghi, width=w, color='#f39c12', label='GHI', align='center')
+        ax.bar(_MX,     dni, width=w, color='#e74c3c', label='DNI', align='center')
+        ax.bar(_MX + w, dhi, width=w, color='#3498db', label='DHI', align='center')
+        ax.plot(_MX, poa, 'k^-', lw=2, ms=7, label='POA (tilted)')
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Irradiation (kWh/m\u00b2/month)')
+        ax.set_title('Monthly Solar Radiation\n(GHI / DNI / DHI + POA tilted plane)')
+        ax.legend(fontsize=9, ncol=2)
+
+        # (0,1) Temperature
+        ax     = fig.add_subplot(gs[0, 1])
+        t_mean = _a(th, 'T_mean_corrected_C') if th.get('T_mean_corrected_C') is not None \
+                 else _a(sc, 'T_mean_monthly_C')
+        t_min  = _a(th, 'T_min_corrected_C')  if th.get('T_min_corrected_C')  is not None \
+                 else _a(sc, 'T_min_monthly_C')
+        t_max  = _a(th, 'T_max_corrected_C')  if th.get('T_max_corrected_C')  is not None \
+                 else _a(sc, 'T_max_monthly_C')
+        frost  = _a(th, 'frost_days_monthly', 0.0) if th.get('frost_days_monthly') is not None \
+                 else _a(sc, 'frost_days_monthly', 0.0)
+        ax.fill_between(_MX, t_min, t_max, alpha=0.18, color='#e67e22', label='T_min \u2013 T_max')
+        ax.plot(_MX, t_mean, 'o-',  color='#e67e22', lw=2.5, ms=7, label='T_mean')
+        ax.plot(_MX, t_min,  's--', color='#3498db', lw=1.5, ms=5, label='T_min')
+        ax.plot(_MX, t_max,  '^--', color='#e74c3c', lw=1.5, ms=5, label='T_max')
+        ax.axhline(0, color='gray', ls=':', lw=1)
+        ax2 = ax.twinx()
+        ax2.bar(_MX, frost, color='#2980b9', alpha=0.28, width=0.7, label='Frost days')
+        ax2.set_ylabel('Frost days/month', color='#2980b9', fontsize=10)
+        ax2.tick_params(axis='y', labelcolor='#2980b9')
+        ax2.set_ylim(0, max(float(np.nanmax(frost)) * 2.5, 5))
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Temperature (\u00b0C)')
+        ax.set_title('Monthly Temperature (site-corrected)\n+ frost days')
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=8, ncol=2)
+
+        # (1,0) Precipitation
+        ax    = fig.add_subplot(gs[1, 0])
+        prcp  = _a(sc, 'precip_monthly_mm')
+        rdays = _a(sc, 'rainy_days_monthly', 0.0)
+        ax.bar(_MX, prcp, color='#2980b9', alpha=0.75, width=0.7, label='Precipitation (mm)')
+        ax.axhline(30,  color='gray',    ls='--', lw=1, label='Dry threshold (30 mm)')
+        ax.axhline(100, color='#2c3e50', ls='--', lw=1, label='Wet threshold (100 mm)')
+        ax2 = ax.twinx()
+        ax2.plot(_MX, rdays, 'ko-', lw=2, ms=7, label='Rainy days')
+        ax2.set_ylabel('Rainy days/month', fontsize=10)
+        ax2.set_ylim(0, max(float(np.nanmax(rdays)) * 2.0, 5))
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Precipitation (mm/month)')
+        ax.set_title('Monthly Precipitation (ERA5 ~31 km)\n+ rainy days (> 1 mm)')
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=8, ncol=2)
+
+        # (1,1) Wind speed
+        ax      = fig.add_subplot(gs[1, 1])
+        ws_mean = _a(sc, 'WS_mean_monthly_ms')
+        ws_p95  = _a(sc, 'WS_p95_monthly_ms')
+        ws_max  = _a(sc, 'WS_max_monthly_ms')
+        ax.fill_between(_MX, ws_mean, ws_p95, alpha=0.18, color='#27ae60', label='Mean \u2013 P95')
+        ax.plot(_MX, ws_mean, 'o-',  color='#27ae60', lw=2.5, ms=7, label='WS mean')
+        ax.plot(_MX, ws_p95,  's--', color='#2c3e50', lw=1.8, ms=5, label='WS P95')
+        ax.plot(_MX, ws_max,  '^:',  color='#e74c3c', lw=1.5, ms=5, label='WS max')
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Wind speed (m/s)')
+        ax.set_title('Monthly Wind Speed\n(mean / P95 / max)')
+        ax.legend(fontsize=9, ncol=2)
+
+        # (2,0) Relative humidity
+        ax      = fig.add_subplot(gs[2, 0])
+        rh_mean = _a(sc, 'RH_mean_monthly_pct')
+        rh_min  = _a(sc, 'RH_min_monthly_pct')
+        rh_max  = _a(sc, 'RH_max_monthly_pct')
+        ax.fill_between(_MX, rh_min, rh_max, alpha=0.18, color='#9b59b6', label='RH min \u2013 max')
+        ax.plot(_MX, rh_mean, 'o-',  color='#9b59b6', lw=2.5, ms=7, label='RH mean')
+        ax.plot(_MX, rh_min,  's--', color='#8e44ad', lw=1.5, ms=5, label='RH min')
+        ax.plot(_MX, rh_max,  '^--', color='#6c3483', lw=1.5, ms=5, label='RH max')
+        ax.set_ylim(0, 110); ax.axhline(100, color='gray', ls=':', lw=1)
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Relative humidity (%)')
+        ax.set_title('Monthly Relative Humidity\n(mean / min / max)')
+        ax.legend(fontsize=9, ncol=2)
+
+        # (2,1) Pressure
+        ax = fig.add_subplot(gs[2, 1])
+        sp = _a(sc, 'SP_mean_monthly_hPa')
+        ax.plot(_MX, sp, 'o-', color='#1abc9c', lw=2.5, ms=8)
+        ax.fill_between(_MX, np.nanmin(sp) * 0.999, sp, alpha=0.18, color='#1abc9c')
+        ax.axhline(float(np.nanmean(sp)), color='gray', ls='--', lw=1.2,
+                   label=f'Annual mean {np.nanmean(sp):.1f} hPa')
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Surface pressure (hPa)')
+        ax.set_title('Monthly Mean Surface Pressure')
+        ax.legend(fontsize=9)
+
+        fig.suptitle(
+            f"Site Climate Summary  |  {lat:.4f}N {lon:.4f}E  |  "
+            f"Alt={sensor_alt:.0f} m  (PVGIS TMY + ERA5 Open-Meteo)",
+            fontsize=14, fontweight='bold', y=1.01)
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+    print(f"  Saved: {path}")
