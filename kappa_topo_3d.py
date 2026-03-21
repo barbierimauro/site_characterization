@@ -169,9 +169,9 @@ def compute_kappa_topo_3d(
     pieno_mask = any_hit & (np.abs(z_hit - s_elev) <= dem_sigma_m)
     vuoto_mask = any_hit & (z_hit < s_elev - dem_sigma_m)
 
-    kappa_pieno = float(np.sum(np.where(pieno_mask, dN_obs, 0.0))) / N_ref
-    kappa_sopra = float(np.sum(np.where(sopra_mask, dN_obs, 0.0))) / N_ref
-    kappa_vuoto = float(np.sum(np.where(vuoto_mask, dN_obs, 0.0))) / N_ref
+    kappa_pieno = +float(np.sum(np.where(pieno_mask, dN_obs, 0.0))) / N_ref
+    kappa_sopra = +float(np.sum(np.where(sopra_mask, dN_obs, 0.0))) / N_ref
+    kappa_vuoto = -float(np.sum(np.where(vuoto_mask, dN_obs, 0.0))) / N_ref
     kappa_check = kappa_pieno + kappa_sopra + kappa_vuoto
 
     # ------------------------------------------------------------------ #
