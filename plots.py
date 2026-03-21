@@ -949,3 +949,142 @@ def plot_kappa_budget(results, path, lat, lon):
         fig.savefig(path, dpi=200, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_water(water, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
+    """Three-panel JRC surface water analysis:
+    Left:   2D occurrence map on DEM grid.
+    Centre: radial occurrence profile with W(r) weighting.
+    Right:  eta + N_correction summary."""
+    from matplotlib.colors import Normalize
+    from matplotlib.cm import ScalarMappable
+
+    eta         = float(water.get('eta', 0.0))
+    ncf         = float(water.get('N_correction_factor', 1.0))
+    occ_map     = water.get('occ_map_dem')          # 2D array [0-100] float
+    wm_fp       = water.get('water_mask_fp')        # bool 2D
+    occ_w       = float(water.get('occ_weighted_mean', 0.0))
+    pix_w       = int(water.get('pixels_water_fp', 0))
+    pix_t       = int(water.get('pixels_total_fp', 1))
+    area_m2     = float(water.get('water_area_m2', 0.0))
+    tile        = water.get('tile_name', 'N/A')
+    f_w         = float(water.get('f_water_used', 0.03))
+    from_cache  = water.get('from_cache', False)
+
+    th   = np.linspace(0, 2*np.pi, 360)
+    clip = min(1.5 * r86, 600.0)
+
+    with plt.rc_context(STYLE):
+        fig = plt.figure(figsize=(22, 8))
+        gs  = plt.GridSpec(1, 3, figure=fig, wspace=0.38)
+
+        # ── LEFT: occurrence map ──────────────────────────────────────────
+        ax = fig.add_subplot(gs[0, 0])
+        if occ_map is not None:
+            occ_frac = occ_map / 100.0
+            cm = ax.pcolormesh(dx_grid, dy_grid, occ_frac,
+                               cmap='Blues', shading='auto', vmin=0, vmax=1)
+            plt.colorbar(cm, ax=ax, fraction=0.03, pad=0.02).set_label(
+                'JRC Occurrence fraction (0=never, 1=always)', fontsize=9)
+            # water pixels highlighted
+            if wm_fp is not None:
+                occ_hl = np.where(wm_fp, occ_frac, np.nan)
+                ax.contour(dx_grid, dy_grid, (~np.isnan(occ_hl)).astype(float),
+                           levels=[0.5], colors=['#e74c3c'], linewidths=1.2,
+                           linestyles='--')
+        ax.plot(r86 * np.sin(th), r86 * np.cos(th), 'k--', lw=2,
+                label=f'r86={r86:.0f} m')
+        ax.plot(0, 0, 'k^', ms=10, zorder=5, label='Sensor')
+        ax.set_aspect('equal')
+        ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
+        ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
+        ax.set_title(f'JRC Surface Water Occurrence\n'
+                     f'(tile: {tile}  |  {"from cache" if from_cache else "freshly downloaded"})\n'
+                     f'Red dashes = water pixels inside footprint')
+        ax.legend(fontsize=9)
+
+        # ── CENTRE: radial occurrence profile ────────────────────────────
+        ax = fig.add_subplot(gs[0, 1])
+        r_bins = np.arange(0, r86 + 15, 15.0)
+        r_mid  = 0.5 * (r_bins[:-1] + r_bins[1:])
+        occ_r  = np.zeros(len(r_mid))
+        w_r    = np.zeros(len(r_mid))
+
+        if occ_map is not None:
+            occ_frac = occ_map / 100.0
+            lam = r86 / 3.0
+            for k, (r0, r1) in enumerate(zip(r_bins[:-1], r_bins[1:])):
+                ring = (dist_grid >= r0) & (dist_grid < r1)
+                if not np.any(ring): continue
+                r_px = dist_grid[ring]
+                W    = np.where(r_px < 1e-3, 0.0, np.exp(-r_px / lam))
+                of   = occ_frac[ring]
+                Ws   = W.sum()
+                occ_r[k] = float(np.sum(W * of) / Ws) if Ws > 0 else 0.0
+                w_r[k]   = float(Ws)
+
+        bar_cols = [plt.get_cmap('Blues')(v * 0.9 + 0.1) for v in occ_r]
+        ax.bar(r_mid, occ_r * 100, width=13, color=bar_cols,
+               edgecolor='white', align='center', label='W(r)-weighted occurrence (%)')
+        wn = w_r / max(w_r.max(), 1e-9)
+        ax.plot(r_mid, wn * occ_r.max() * 100 if occ_r.max() > 0 else wn,
+                'k--', lw=1.8, label='W(r) shape (normalised)')
+        ax.axhline(occ_w * 100, color='#e74c3c', ls='-.', lw=2,
+                   label=f'Weighted mean = {occ_w*100:.2f}%')
+        ax.set_xlabel('Distance from sensor (m)')
+        ax.set_ylabel('Mean occurrence (%)')
+        ax.set_title('Radial Water Occurrence Profile\n'
+                     '(W(r)-weighted, 15 m rings)\n'
+                     'Blue bars = mean water frequency per ring')
+        ax.set_xlim(0, r86); ax.legend(fontsize=9)
+
+        # ── RIGHT: eta + correction summary ──────────────────────────────
+        ax = fig.add_subplot(gs[0, 2])
+        bar_lbls = ['\u03b7\n(count reduction)', 'N correction\nfactor \u22121 (%)']
+        bar_vals = [eta, (ncf - 1.0) * 100]
+        bar_cols2 = ['#e74c3c' if eta > 0.01 else '#f39c12' if eta > 0.001 else '#27ae60',
+                     '#2980b9']
+        bars = ax.bar(range(2), bar_vals, color=bar_cols2, edgecolor='white',
+                      lw=1.5, width=0.55)
+        ax.axhline(0, color='gray', ls='--', lw=1)
+        for bar, v in zip(bars, bar_vals):
+            ax.text(bar.get_x() + bar.get_width()/2, v + max(bar_vals) * 0.03,
+                    f'{v:.4f}', ha='center', va='bottom',
+                    fontsize=11, fontweight='bold')
+        ax.set_xticks(range(2)); ax.set_xticklabels(bar_lbls, fontsize=10)
+        ax.set_ylabel('\u03b7  or  (N_corr / N_obs \u2212 1)  [%]')
+
+        if eta < 0.001:
+            interp = 'Negligible  (< 0.1%)'
+            icol   = '#27ae60'
+        elif eta < 0.01:
+            interp = 'Minor  (0.1 \u2013 1%)'
+            icol   = '#f39c12'
+        elif eta < 0.05:
+            interp = 'Significant  (1 \u2013 5%)'
+            icol   = '#e67e22'
+        else:
+            interp = 'LARGE  (> 5%) \u2014 correction required'
+            icol   = '#e74c3c'
+
+        ax.set_title(f'Water Correction Budget\n'
+                     f'N_corrected = N_obs \u00d7 {ncf:.4f}\n'
+                     f'Impact: {interp}', color=icol if eta > 0.001 else 'black')
+
+        info_txt = (f"f_water = {f_w:.3f}  (Zreda 2012)\n"
+                    f"Occ weighted mean: {occ_w*100:.2f}%\n"
+                    f"Water pixels: {pix_w} / {pix_t}  "
+                    f"({pix_w/max(pix_t,1)*100:.1f}%)\n"
+                    f"Water area \u2248 {area_m2/1e4:.2f} ha\n"
+                    f"N_corrected = N_obs / (1\u2212\u03b7)")
+        ax.text(0.98, 0.97, info_txt, transform=ax.transAxes,
+                fontsize=9, ha='right', va='top',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='#ecf0f1', alpha=0.85))
+
+        fig.suptitle(
+            f"JRC Surface Water Correction (\u03b7)  |  {lat:.4f}N {lon:.4f}E  |  "
+            f"JRC Global Surface Water v1.4 (Pekel 2016)",
+            fontsize=14, fontweight='bold')
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+    print(f"  Saved: {path}")
