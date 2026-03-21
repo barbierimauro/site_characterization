@@ -857,3 +857,95 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
         fig.savefig(path, dpi=200, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_kappa_budget(results, path, lat, lon):
+    """Two-panel kappa budget + expected flux chain:
+    Left: kappa decomposition (pieno/sopra/vuoto + muon + total).
+    Right: expected CRNS count rates (sea-level vs site, N0)."""
+    with plt.rc_context(STYLE):
+        fig = plt.figure(figsize=(20, 8))
+        gs  = GridSpec(1, 2, figure=fig, wspace=0.40)
+
+        def _f(key, default=np.nan):
+            v = results.get(key, default)
+            return float(v) if v is not None else default
+
+        kappa_pieno = _f('kappa_pieno')
+        kappa_sopra = _f('kappa_sopra')
+        kappa_vuoto = _f('kappa_vuoto')
+        kappa_topo  = _f('kappa_topo')
+        kappa_muon  = _f('kappa_muon')
+        kappa_tot   = _f('kappa_total')
+        V0          = _f('V0')
+        Veff        = _f('Veff')
+        ki          = results.get('kappa_info', {})
+
+        # LEFT: kappa decomposition bar chart
+        ax   = fig.add_subplot(gs[0, 0])
+        vals = [kappa_pieno, kappa_sopra, kappa_vuoto, kappa_topo, kappa_muon, kappa_tot]
+        lbls = ['\u03ba_pieno\n(full vol.)', '\u03ba_sopra\n(above ref.)',
+                '\u03ba_vuoto\n(below slab)', '\u03ba_topo\n(total)',
+                '\u03ba_muon\n(sky FOV)', '\u03ba_total\n(combined)']
+        cols = ['#e74c3c' if v > 1 else '#3498db' for v in vals]
+        cols[3] = '#e67e22'   # kappa_topo
+        cols[5] = '#8e44ad'   # kappa_total
+        bars = ax.bar(range(6), vals, color=cols, edgecolor='white', lw=1.5, width=0.60)
+        ax.axhline(1.0, color='gray', ls='--', lw=1.5, label='Reference = 1.0')
+        for bar, v in zip(bars, vals):
+            if not np.isnan(v):
+                ax.text(bar.get_x() + bar.get_width()/2,
+                        v + 0.01 if v >= 0 else v - 0.02,
+                        f'{v:.4f}', ha='center', va='bottom',
+                        fontsize=10, fontweight='bold')
+        ax.set_xticks(range(6)); ax.set_xticklabels(lbls, fontsize=10)
+        ax.set_ylabel('Correction factor \u03ba')
+        ax.set_title('\u03ba Decomposition: Neutron + Muon Budgets\n'
+                     '(red > 1 overestimate / blue < 1 underestimate)')
+        ax.set_ylim(0, max([v for v in vals if not np.isnan(v)] + [1.0]) * 1.30)
+        ax.legend(fontsize=9)
+        veff_pct = Veff / V0 * 100 if not (np.isnan(V0) or np.isnan(Veff) or V0 == 0) else np.nan
+        ann = (f"V0 = {V0:.2f} m\u00b3  |  Veff = {Veff:.2f} m\u00b3  ({veff_pct:.1f}%)\n"
+               f"Rays: {ki.get('n_rays_total','?')} total / {ki.get('n_rays_hit','?')} hit DEM\n"
+               f"Pieno: {ki.get('n_pieno','?')} px  |  Sopra: {ki.get('n_sopra','?')} px  "
+               f"|  Vuoto: {ki.get('n_vuoto','?')} px")
+        ax.text(0.01, 0.98, ann, transform=ax.transAxes,
+                fontsize=8, va='top', ha='left',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='#ecf0f1', alpha=0.85))
+
+        # RIGHT: expected flux chain
+        ax2  = fig.add_subplot(gs[0, 1])
+        sf   = results.get('site_fluxes', {})
+        def _sf(k, d=np.nan): return float(sf.get(k, d)) if sf.get(k) is not None else d
+        N_muon_sl = _sf('N_muon_sl', 4000.0)
+        N_neut_sl = _sf('N_neut_sl',  900.0)
+        N_muon    = _sf('N_muon_site')
+        N_neut    = _sf('N_neut_site')
+        N0        = _sf('N0_theoretical')
+        x_lbls = ['N_muon\nsea-level', 'N_muon\nsite', 'N_neut\nsea-level',
+                  'N_neut\nsite', 'N0\n(dry soil)']
+        x_vals = [N_muon_sl, N_muon, N_neut_sl, N_neut, N0]
+        x_cols = ['#7f8c8d','#2980b9','#95a5a6','#27ae60','#8e44ad']
+        brs = ax2.bar(range(5), x_vals, color=x_cols, edgecolor='white', lw=1.5, width=0.6)
+        for bar, v in zip(brs, x_vals):
+            if not np.isnan(v):
+                ax2.text(bar.get_x() + bar.get_width()/2, v * 1.02,
+                         f'{v:.0f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+        ax2.set_xticks(range(5)); ax2.set_xticklabels(x_lbls, fontsize=10)
+        ax2.set_ylabel('Count rate (cph)')
+        ax2.set_title('Expected CRNS Count Rates\n'
+                      '(sea-level \u2192 altitude + \u03ba corrections applied)')
+        ax2.text(0.98, 0.97,
+                 f"P = {_f('pressure'):.1f} hPa\n"
+                 f"Rc = {_sf('Rc_gv'):.2f} GV  |  f(Rc) = {_sf('f_Rc'):.4f}\n"
+                 f"Alt factor muon = {_sf('alt_factor_muon'):.4f}\n"
+                 f"Alt factor neut = {_sf('alt_factor_neut'):.4f}\n"
+                 f"r86 = {_f('r86'):.0f} m  |  z86 = {_f('z86'):.1f} cm",
+                 transform=ax2.transAxes, fontsize=9, ha='right', va='top',
+                 bbox=dict(boxstyle='round,pad=0.4', facecolor='#ecf0f1', alpha=0.85))
+
+        fig.suptitle(f"\u03ba Budget & Expected Fluxes  |  {lat:.4f}N {lon:.4f}E",
+                     fontsize=14, fontweight='bold')
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+    print(f"  Saved: {path}")
