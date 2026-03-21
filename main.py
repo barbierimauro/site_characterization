@@ -47,9 +47,11 @@ LON = 11.763470
 LAT = 45.338058
 
 #================
-LON = 11.885655         # decimal degrees, WGS84
-LAT = 46.279864          # decimal degrees, WGS84
 
+NAME = "RAVALLES"
+# RA VALLES
+LON             = 12.077010   # decimal degrees WGS84
+LAT             = 46.548503   # decimal degrees WGS84
 
 
 
@@ -58,7 +60,7 @@ RHO_BULK        = 1.4         # soil bulk density (g/cm3)
 THETA_V_INIT    = 0.20        # soil moisture estimate for r86/z86 (m3/m3)
 DEM_RADIUS_M    = 2000.0      # DEM download radius (m)
 AZIMUTH_STEP_DEG= 2.0         # azimuth resolution for horizon scan (deg)
-OUTPUT_DIR      = "pale"
+OUTPUT_DIR      = NAME
 OPENTOPO_API_KEY= ""
 DEM_SOURCE      = "copernicus_aws"
 N_CORES         = 4
