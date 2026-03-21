@@ -633,3 +633,116 @@ def plot_soil(soil, path, lat, lon):
         fig.savefig(path, dpi=200, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
+    """Four-panel thermal correction: ERA5 vs corrected T_mean,
+    min/max corrected, correction components, frost days comparison."""
+    sc = site_climate
+    th = thermal or {}
+
+    def _a12(d, key):
+        v = d.get(key)
+        return np.asarray(v, dtype=float) if v is not None else np.full(12, np.nan)
+
+    def _f(d, key, default=np.nan):
+        v = d.get(key)
+        return float(v) if v is not None and not np.isnan(float(v)) else default
+
+    with plt.rc_context(STYLE):
+        fig = plt.figure(figsize=(20, 14))
+        gs  = GridSpec(2, 2, figure=fig, hspace=0.44, wspace=0.35)
+
+        # (0,0) T_mean: ERA5 raw vs site-corrected
+        ax      = fig.add_subplot(gs[0, 0])
+        t_era5  = _a12(sc, 'T_mean_monthly_C')
+        t_corr  = _a12(th, 'T_mean_corrected_C')
+        dT      = t_corr - t_era5
+        ax.plot(_MX, t_era5, 'o--', color='#7f8c8d', lw=2,   ms=7, label='T_mean ERA5 (raw)')
+        ax.plot(_MX, t_corr, 'o-',  color='#e67e22', lw=2.5, ms=8, label='T_mean site-corrected')
+        ax.axhline(0, color='gray', ls=':', lw=1)
+        ax2 = ax.twinx()
+        ax2.bar(_MX, dT, color=['#e74c3c' if d > 0 else '#3498db' for d in dT],
+                alpha=0.40, width=0.6, label='\u0394T (corr \u2212 ERA5)')
+        ax2.axhline(0, color='gray', ls=':', lw=1)
+        ax2.set_ylabel('\u0394T (\u00b0C)', fontsize=10)
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Temperature (\u00b0C)')
+        ax.set_title('T_mean: ERA5 vs Site-Corrected\n(bar = site \u2212 ERA5 difference)')
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=9, loc='upper left')
+
+        # (0,1) Corrected T_min / T_mean / T_max
+        ax     = fig.add_subplot(gs[0, 1])
+        t_min  = _a12(th, 'T_min_corrected_C')
+        t_max  = _a12(th, 'T_max_corrected_C')
+        ax.fill_between(_MX, t_min, t_max, alpha=0.18, color='#c0392b', label='T_min \u2013 T_max')
+        ax.plot(_MX, t_min,  's-', color='#2980b9', lw=2, ms=7,
+                label=f"T_min  (ann {_f(th,'T_min_annual_corrected_C'):.1f}\u00b0C)")
+        ax.plot(_MX, t_corr, 'o-', color='#e67e22', lw=2, ms=7,
+                label=f"T_mean (ann {_f(th,'T_mean_annual_corrected_C'):.1f}\u00b0C)")
+        ax.plot(_MX, t_max,  '^-', color='#e74c3c', lw=2, ms=7,
+                label=f"T_max  (ann {_f(th,'T_max_annual_corrected_C'):.1f}\u00b0C)")
+        ax.axhline(0, color='gray', ls=':', lw=1)
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Temperature (\u00b0C)')
+        ax.set_title('Corrected Monthly Temperatures\n(T_mean / T_min / T_max)')
+        ax.legend(fontsize=9)
+
+        # (1,0) Correction components
+        ax       = fig.add_subplot(gs[1, 0])
+        dT_lapse = _f(th, 'dT_lapse_C', 0.0)
+        dT_pool  = _f(th, 'dT_cold_pool_C', 0.0)
+        dT_pisr  = _f(th, 'dT_pisr_C', 0.0)
+        dT_tot   = dT_lapse + dT_pool + dT_pisr
+        vals  = [dT_lapse, dT_pool, dT_pisr, dT_tot]
+        lbls  = ['Lapse rate\n(altitude)', 'Cold-pool\n(valley)',
+                 'PISR\n(insolation)', 'Total \u0394T']
+        cols  = ['#e74c3c' if v > 0 else '#3498db' for v in vals]
+        cols[-1] = '#e67e22'
+        bars = ax.bar(range(4), vals, color=cols, edgecolor='white', lw=1.5, width=0.55)
+        ax.axhline(0, color='gray', ls='--', lw=1.5)
+        for bar, v in zip(bars, vals):
+            if not np.isnan(v):
+                ax.text(bar.get_x() + bar.get_width()/2,
+                        v + (0.04 if v >= 0 else -0.10),
+                        f'{v:+.2f}\u00b0C', ha='center', va='bottom',
+                        fontsize=11, fontweight='bold')
+        ax.set_xticks(range(4)); ax.set_xticklabels(lbls, fontsize=10)
+        ax.set_ylabel('Temperature correction \u0394T (\u00b0C)')
+        ax.set_title('Thermal Correction Components\n(red=warming / blue=cooling)')
+        ax.text(0.98, 0.97,
+                f"\u03b3 lapse = {_f(th,'gamma_used'):.4f} \u00b0C/m\n"
+                f"SVF = {_f(th,'svf'):.3f}\n"
+                f"Concavity = {_f(th,'concavity_m'):.1f} m\n"
+                f"Total unc. \u00b1{_f(th,'uncertainty_C'):.2f} \u00b0C",
+                transform=ax.transAxes, fontsize=9, ha='right', va='top',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='#ecf0f1', alpha=0.85))
+
+        # (1,1) Frost days: ERA5 vs corrected
+        ax        = fig.add_subplot(gs[1, 1])
+        fr_era5   = _a12(sc, 'frost_days_monthly')
+        fr_corr   = _a12(th, 'frost_days_monthly')
+        w = 0.38
+        ax.bar(_MX - w/2, fr_era5, width=w, color='#7f8c8d', alpha=0.82,
+               label=f"ERA5  (ann {_f(sc,'frost_days_annual'):.0f} d)")
+        ax.bar(_MX + w/2, fr_corr, width=w, color='#2980b9', alpha=0.82,
+               label=f"Site-corrected  (ann {_f(th,'frost_days_annual'):.0f} d)")
+        ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
+        ax.set_ylabel('Frost days / month')
+        ax.set_title('Frost Days: ERA5 vs Site-Corrected\n'
+                     '(accounts for cold-pool trapping in valleys)')
+        ax.legend(fontsize=9)
+        ax.text(0.98, 0.97,
+                f"Cold-pool index = {_f(th,'cold_pool_index'):.3f}\n"
+                f"\u0394z (site \u2212 ERA5) = {_f(th,'delta_elevation_m'):+.0f} m",
+                transform=ax.transAxes, fontsize=9, ha='right', va='top',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='#ecf0f1', alpha=0.85))
+
+        fig.suptitle(
+            f"Thermal Correction  |  {lat:.4f}N {lon:.4f}E  |  Alt={sensor_alt:.0f} m",
+            fontsize=14, fontweight='bold', y=1.01)
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+    print(f"  Saved: {path}")
