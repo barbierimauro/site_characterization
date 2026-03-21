@@ -6,30 +6,21 @@ Pipeline per il calcolo degli indici di vegetazione per un sito CRNS.
 Sorgenti
 --------
 Landsat Collection 2 Level-2 (Planetary Computer, pubblico):
-  - NDVI  = (NIR - Red) / (NIR + Red)
-  - EVI   = 2.5 * (NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1)
-  - NDWI  = (Green - NIR) / (Green + NIR)   [acqua/neve]
-  - FCOVER = (NDVI - NDVI_soil) / (NDVI_veg - NDVI_soil)  [Gutman 1998]
-  Risoluzione: 30m | Dal 2013 in poi | Revisit ~8gg (L8+L9)
-  Footprint intero (r86), media pesata W(r)
+  NDVI, EVI, NDWI, FCOVER — 30m, footprint intero, media pesata W(r)
+  Dal 2013 in poi, Landsat 8+9
 
 MODIS MCD15A3H (Planetary Computer, pubblico):
-  - LAI   = Leaf Area Index  [m2/m2]
-  Risoluzione: 500m | Dal 2002 in poi | Ogni 4 giorni
-  Array 5x5 pixel centrato sulle coordinate
+  LAI — 500m, array 5×5 pixel centrati sulle coordinate
+  Dal 2013 in poi
 
 Cache
 -----
-Per ogni scena: hash(item_id + bbox) -> .npz con valori scalati e mascherati.
-La cache è condivisa tra run successivi — un sito non viene mai riscaricato.
+UN solo file per sorgente per sito:
+  landsat_cache_{hash16}.npz   — serie temporale completa Landsat
+  modis_cache_{hash16}.npz     — serie temporale completa MODIS
 
-Output
-------
-- Medie mensili climatologiche (12 valori per variabile)
-- Std interannuale mensile
-- Numero di osservazioni valide per mese
-- Serie temporale completa (tutte le scene valide)
-- Valore più recente disponibile
+La cache è aggiornata incrementalmente: alla seconda run scarica
+solo le scene successive all'ultima data già in cache.
 
 Author      : MB
 Affiliation :
@@ -40,8 +31,10 @@ import os
 import json
 import hashlib
 import warnings
+import threading
 import numpy as np
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -49,12 +42,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 # Costanti fisiche
 # ---------------------------------------------------------------------------
 
-# Landsat C2 L2 scale/offset per riflettanza superficiale
 L2_SCALE  = 2.75e-5
 L2_OFFSET = -0.2
 L2_NODATA = 0
 
-# QA_PIXEL bitmask Landsat Collection 2
 QA_FILL       = 1 << 0
 QA_CLOUD      = 1 << 3
 QA_CLOUD_SHAD = 1 << 4
@@ -62,55 +53,106 @@ QA_SNOW       = 1 << 5
 QA_CLEAR      = 1 << 6
 QA_WATER      = 1 << 7
 
-# FCOVER parametri Gutman & Ignatov 1998
 FCOVER_NDVI_SOIL = 0.05
 FCOVER_NDVI_VEG  = 0.95
 
-# MODIS LAI scale
 MODIS_LAI_SCALE  = 0.1
 MODIS_LAI_NODATA = 255
 
-# Landsat: anno di inizio (Landsat 8 lancio aprile 2013)
 LANDSAT_START_YEAR = 2013
+MODIS_START_YEAR   = 2013
 
-# MODIS MCD15A3H: inizio dataset
-MODIS_START_DATE = "2002-07-04"
-
-# Planetary Computer STAC URL
 PC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
+N_WORKERS = 8   # thread paralleli per download
+
 
 # ---------------------------------------------------------------------------
-# Cache helpers
+# Cache: UN file per sorgente per sito
 # ---------------------------------------------------------------------------
 
-def _cache_key(item_id, bbox_str):
-    tag = f"{item_id}_{bbox_str}"
-    return hashlib.sha256(tag.encode()).hexdigest()[:20]
+def _site_hash(lat, lon, r86, start_year):
+    tag = f"{lat:.5f}_{lon:.5f}_{r86:.1f}_{start_year}"
+    return hashlib.sha256(tag.encode()).hexdigest()[:16]
 
 
-def _cache_save(cache_dir, key, arrays_dict, meta_dict):
-    os.makedirs(cache_dir, exist_ok=True)
-    npz  = os.path.join(cache_dir, f"veg_{key}.npz")
-    meta = os.path.join(cache_dir, f"veg_{key}.json")
-    np.savez_compressed(npz, **arrays_dict)
-    with open(meta, "w") as f:
-        json.dump(meta_dict, f)
+def _landsat_cache_path(cache_dir, lat, lon, r86, start_year):
+    h = _site_hash(lat, lon, r86, start_year)
+    return os.path.join(cache_dir, f"landsat_cache_{h}.npz"), \
+           os.path.join(cache_dir, f"landsat_cache_{h}.json")
 
 
-def _cache_load(cache_dir, key):
-    npz  = os.path.join(cache_dir, f"veg_{key}.npz")
-    meta = os.path.join(cache_dir, f"veg_{key}.json")
+def _modis_cache_path(cache_dir, lat, lon, start_year):
+    h = _site_hash(lat, lon, 0.0, start_year)
+    return os.path.join(cache_dir, f"modis_cache_{h}.npz"), \
+           os.path.join(cache_dir, f"modis_cache_{h}.json")
+
+
+def _load_landsat_cache(cache_dir, lat, lon, r86, start_year):
+    """
+    Carica la cache Landsat.
+    Ritorna (timeseries_list, last_date_str) oppure ([], None).
+    timeseries_list: lista di dict {date, ndvi, evi, ndwi, fcover, n_clear}
+    """
+    npz, meta = _landsat_cache_path(cache_dir, lat, lon, r86, start_year)
     if not (os.path.exists(npz) and os.path.exists(meta)):
-        return None, None
-    with open(meta) as f:
-        m = json.load(f)
-    d = np.load(npz)
-    return dict(d), m
+        return [], None
+    try:
+        d  = np.load(npz, allow_pickle=True)
+        ts = d["timeseries"].tolist()   # lista di dict
+        with open(meta) as f:
+            m = json.load(f)
+        last_date = m.get("last_date")
+        return ts, last_date
+    except Exception:
+        return [], None
+
+
+def _save_landsat_cache(cache_dir, lat, lon, r86, start_year,
+                         timeseries, last_date):
+    os.makedirs(cache_dir, exist_ok=True)
+    npz, meta = _landsat_cache_path(cache_dir, lat, lon, r86, start_year)
+    np.savez_compressed(npz, timeseries=np.array(timeseries, dtype=object))
+    with open(meta, "w") as f:
+        json.dump({"last_date": last_date,
+                   "n_scenes": len(timeseries),
+                   "lat": lat, "lon": lon, "r86": r86,
+                   "start_year": start_year}, f, indent=2)
+
+
+def _load_modis_cache(cache_dir, lat, lon, start_year):
+    """
+    Carica la cache MODIS.
+    Ritorna (timeseries_list, last_date_str).
+    timeseries_list: lista di dict {date, lai_mean, lai_std}
+    """
+    npz, meta = _modis_cache_path(cache_dir, lat, lon, start_year)
+    if not (os.path.exists(npz) and os.path.exists(meta)):
+        return [], None
+    try:
+        d  = np.load(npz, allow_pickle=True)
+        ts = d["timeseries"].tolist()
+        with open(meta) as f:
+            m = json.load(f)
+        return ts, m.get("last_date")
+    except Exception:
+        return [], None
+
+
+def _save_modis_cache(cache_dir, lat, lon, start_year,
+                       timeseries, last_date):
+    os.makedirs(cache_dir, exist_ok=True)
+    npz, meta = _modis_cache_path(cache_dir, lat, lon, start_year)
+    np.savez_compressed(npz, timeseries=np.array(timeseries, dtype=object))
+    with open(meta, "w") as f:
+        json.dump({"last_date": last_date,
+                   "n_scenes": len(timeseries),
+                   "lat": lat, "lon": lon,
+                   "start_year": start_year}, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
-# Radial weight
+# Peso radiale
 # ---------------------------------------------------------------------------
 
 def _weight_radial(dist, r86):
@@ -122,64 +164,42 @@ def _weight_radial(dist, r86):
 # Landsat helpers
 # ---------------------------------------------------------------------------
 
-def _l2_reflectance(data, nodata=L2_NODATA,
-                    scale=L2_SCALE, offset=L2_OFFSET):
-    """Converte uint16 DN in riflettanza superficiale [0-1]."""
-    mask  = (data != nodata) & (data > 0)
-    refl  = np.where(mask,
-                     data.astype(float) * scale + offset,
-                     np.nan)
+def _l2_reflectance(data):
+    mask = (data != L2_NODATA) & (data > 0)
+    refl = np.where(mask,
+                    data.astype(float) * L2_SCALE + L2_OFFSET,
+                    np.nan)
     return np.clip(refl, 0.0, 1.0)
 
 
 def _qa_clear_mask(qa_data):
-    """
-    Maschera pixel validi da QA_PIXEL Landsat C2.
-    Valido = bit CLEAR attivo E nessun cloud/shadow/snow/fill.
-    """
-    qa = qa_data.astype(np.uint16)
-    clear  = (qa & QA_CLEAR) > 0
-    no_cld = (qa & QA_CLOUD) == 0
+    qa     = qa_data.astype(np.uint16)
+    clear  = (qa & QA_CLEAR)      > 0
+    no_cld = (qa & QA_CLOUD)      == 0
     no_shd = (qa & QA_CLOUD_SHAD) == 0
-    no_snw = (qa & QA_SNOW) == 0
-    no_fill= (qa & QA_FILL) == 0
+    no_snw = (qa & QA_SNOW)       == 0
+    no_fill= (qa & QA_FILL)       == 0
     return clear & no_cld & no_shd & no_snw & no_fill
 
 
 def _compute_indices(red, nir, green, blue, clear_mask):
-    """
-    Calcola NDVI, EVI, NDWI, FCOVER su array 2D già in riflettanza.
-    Pixel non validi -> NaN.
-    """
-    # NDVI
     denom_ndvi = nir + red
-    ndvi = np.where(
-        clear_mask & (denom_ndvi > 0.01),
-        (nir - red) / denom_ndvi,
-        np.nan)
+    ndvi = np.where(clear_mask & (denom_ndvi > 0.01),
+                    (nir - red) / denom_ndvi, np.nan)
 
-    # EVI (Huete 2002)
     denom_evi = nir + 6.0*red - 7.5*blue + 1.0
-    evi = np.where(
-        clear_mask & (denom_evi > 0.01),
-        2.5 * (nir - red) / denom_evi,
-        np.nan)
+    evi = np.where(clear_mask & (denom_evi > 0.01),
+                   2.5 * (nir - red) / denom_evi, np.nan)
     evi = np.clip(evi, -1.0, 1.0)
 
-    # NDWI (Gao 1996 — acqua in vegetazione)
     denom_ndwi = green + nir
-    ndwi = np.where(
-        clear_mask & (denom_ndwi > 0.01),
-        (green - nir) / denom_ndwi,
-        np.nan)
+    ndwi = np.where(clear_mask & (denom_ndwi > 0.01),
+                    (green - nir) / denom_ndwi, np.nan)
 
-    # FCOVER (Gutman & Ignatov 1998)
     fcover = np.where(
         ~np.isnan(ndvi),
-        np.clip(
-            (ndvi - FCOVER_NDVI_SOIL) /
-            (FCOVER_NDVI_VEG - FCOVER_NDVI_SOIL),
-            0.0, 1.0),
+        np.clip((ndvi - FCOVER_NDVI_SOIL) /
+                (FCOVER_NDVI_VEG - FCOVER_NDVI_SOIL), 0.0, 1.0),
         np.nan)
 
     return ndvi, evi, ndwi, fcover
@@ -187,113 +207,84 @@ def _compute_indices(red, nir, green, blue, clear_mask):
 
 def _read_landsat_scene(signed_item, lat, lon, r86, dx_grid, dy_grid):
     """
-    Legge le bande Red, NIR, Green, Blue, QA di una scena Landsat
-    e ritorna gli indici NDVI, EVI, NDWI, FCOVER sulla griglia DEM.
-
-    Returns
-    -------
-    dict con arrays 2D (stessa shape di dx_grid) per ogni indice,
-    oppure None se la scena non ha pixel validi nel footprint.
+    Windowed read di una scena Landsat + calcolo indici.
+    Ritorna dict con array 2D (shape = dx_grid.shape) per ogni indice,
+    oppure None se fallisce o nessun pixel valido.
     """
     import rasterio
     from rasterio.warp import transform_bounds
+    from rasterio.warp import transform as rio_transform
     from rasterio.windows import from_bounds
     from rasterio.crs import CRS
     from scipy.spatial import cKDTree
 
-    wgs84   = CRS.from_epsg(4326)
-    bands   = {"red": None, "nir08": None,
-               "green": None, "blue": None, "qa_pixel": None}
+    wgs84      = CRS.from_epsg(4326)
+    c          = np.cos(np.radians(lat))
+    margin_lon = (r86 * 1.2) / (111320.0 * c)
+    margin_lat = (r86 * 1.2) / 111320.0
+    bbox_wgs84 = (lon - margin_lon, lat - margin_lat,
+                  lon + margin_lon, lat + margin_lat)
 
-    # Bounding box footprint in WGS84
-    c           = np.cos(np.radians(lat))
-    margin_deg  = (r86 * 1.2) / (111320.0 * c)
-    margin_deg_lat = (r86 * 1.2) / 111320.0
-    bbox_wgs84  = (lon - margin_deg, lat - margin_deg_lat,
-                   lon + margin_deg, lat + margin_deg_lat)
-
-    raw_data = {}
-    crs_raster = None
+    raw_data         = {}
+    crs_raster       = None
     transform_raster = None
-    shape_raster = None
+    shape_raster     = None
 
-    for band_name in bands:
-        if band_name not in signed_item.assets:
-            continue
-        href = signed_item.assets[band_name].href
+    for band in ["red", "nir08", "green", "blue", "qa_pixel"]:
+        if band not in signed_item.assets:
+            return None
+        href = signed_item.assets[band].href
         try:
             with rasterio.open(href) as src:
                 if crs_raster is None:
                     crs_raster = src.crs
-                # Trasforma bbox in CRS del raster
-                l, b, r, t = transform_bounds(
-                    wgs84, src.crs, *bbox_wgs84)
-                win  = from_bounds(l, b, r, t,
-                                   transform=src.transform)
+                l, b, r, t = transform_bounds(wgs84, src.crs, *bbox_wgs84)
+                win  = from_bounds(l, b, r, t, transform=src.transform)
                 data = src.read(1, window=win)
-                win_tf = src.window_transform(win)
                 if transform_raster is None:
-                    transform_raster = win_tf
+                    transform_raster = src.window_transform(win)
                     shape_raster     = data.shape
-                raw_data[band_name] = data
+                raw_data[band] = data
         except Exception:
             return None
 
-    if not all(b in raw_data for b in
-               ["red", "nir08", "green", "blue", "qa_pixel"]):
-        return None
-
-    # Converte in riflettanza
     red   = _l2_reflectance(raw_data["red"])
     nir   = _l2_reflectance(raw_data["nir08"])
     green = _l2_reflectance(raw_data["green"])
     blue  = _l2_reflectance(raw_data["blue"])
-    qa    = raw_data["qa_pixel"]
-    clear = _qa_clear_mask(qa)
+    clear = _qa_clear_mask(raw_data["qa_pixel"])
 
-    # Calcola indici sulla griglia Landsat
     ndvi, evi, ndwi, fcover = _compute_indices(
         red, nir, green, blue, clear)
 
-    # Coordinate pixel Landsat nel crop
-    nr, nc = shape_raster
+    # Coordinate pixel Landsat -> metriche centrate sul sensore
+    nr, nc  = shape_raster
     col_idx = np.arange(nc)
     row_idx = np.arange(nr)
+    px_x    = transform_raster.c + (col_idx + 0.5) * transform_raster.a
+    px_y    = transform_raster.f + (row_idx + 0.5) * transform_raster.e
+    PX, PY  = np.meshgrid(px_x, px_y)
 
-    # Pixel centers in CRS raster
-    px_x = transform_raster.c + (col_idx + 0.5) * transform_raster.a
-    px_y = transform_raster.f + (row_idx + 0.5) * transform_raster.e
-    PX, PY = np.meshgrid(px_x, px_y)
-
-    # Trasforma in coordinate metriche centrate sul sensore (WGS84 -> m)
-    # Usiamo trasformazione approssimata: da CRS UTM a WGS84 a offset metrico
-    from rasterio.warp import transform as rasterio_transform
-    lons_flat, lats_flat = rasterio_transform(
-        crs_raster, wgs84,
-        PX.ravel(), PY.ravel())
+    lons_flat, lats_flat = rio_transform(
+        crs_raster, wgs84, PX.ravel(), PY.ravel())
     lons_flat = np.array(lons_flat)
     lats_flat = np.array(lats_flat)
 
-    dx_ls = (lons_flat - lon) * 111320.0 * c
-    dy_ls = (lats_flat - lat) * 111320.0
+    dx_ls   = (lons_flat - lon) * 111320.0 * c
+    dy_ls   = (lats_flat - lat) * 111320.0
     dist_ls = np.sqrt(dx_ls**2 + dy_ls**2)
+    fp_mask = dist_ls <= r86
 
-    # Maschera: solo pixel dentro r86
-    fp_mask_ls = dist_ls <= r86
-
-    if fp_mask_ls.sum() == 0:
+    if fp_mask.sum() == 0:
         return None
 
-    # Ricampiona sulla griglia DEM tramite nearest neighbor
-    pts_ls  = np.column_stack([dx_ls[fp_mask_ls],
-                                dy_ls[fp_mask_ls]])
+    pts_ls  = np.column_stack([dx_ls[fp_mask], dy_ls[fp_mask]])
     tree    = cKDTree(pts_ls)
     pts_dem = np.column_stack([dx_grid.ravel(), dy_grid.ravel()])
     _, idx  = tree.query(pts_dem)
 
     def _resample(arr):
-        flat = arr.ravel()[fp_mask_ls]
-        return flat[idx].reshape(dx_grid.shape)
+        return arr.ravel()[fp_mask][idx].reshape(dx_grid.shape)
 
     return {
         "ndvi"  : _resample(ndvi),
@@ -305,34 +296,22 @@ def _read_landsat_scene(signed_item, lat, lon, r86, dx_grid, dy_grid):
 
 
 # ---------------------------------------------------------------------------
-# MODIS LAI helpers
+# MODIS helpers
 # ---------------------------------------------------------------------------
 
 def _read_modis_lai_scene(signed_item, lat, lon, n_pixels=5):
-    """
-    Legge un array n_pixels x n_pixels centrato su (lat,lon) dal
-    prodotto LAI MODIS MCD15A3H.
-
-    Returns
-    -------
-    lai_arr : array (n_pixels, n_pixels) valori LAI [m2/m2], NaN=nodata
-    oppure None se lettura fallisce
-    """
     import rasterio
-    from rasterio.warp import transform_bounds, transform as rio_transform
+    from rasterio.warp import transform_bounds
     from rasterio.windows import from_bounds
     from rasterio.crs import CRS
 
-    asset_name = "Lai_500m"
-    if asset_name not in signed_item.assets:
+    if "Lai_500m" not in signed_item.assets:
         return None
 
-    href  = signed_item.assets[asset_name].href
-    wgs84 = CRS.from_epsg(4326)
-
-    # Margine: n_pixels/2 pixel MODIS da 500m
-    margin_m   = (n_pixels / 2 + 0.5) * 500.0
+    href       = signed_item.assets["Lai_500m"].href
+    wgs84      = CRS.from_epsg(4326)
     c          = np.cos(np.radians(lat))
+    margin_m   = (n_pixels / 2 + 0.5) * 500.0
     margin_lon = margin_m / (111320.0 * c)
     margin_lat = margin_m / 111320.0
 
@@ -345,29 +324,18 @@ def _read_modis_lai_scene(signed_item, lat, lon, n_pixels=5):
             win  = from_bounds(l, b, r, t, transform=src.transform)
             data = src.read(1, window=win)
 
-        # Maschera nodata e scala
-        valid = data != MODIS_LAI_NODATA
-        lai   = np.where(valid,
-                         data.astype(float) * MODIS_LAI_SCALE,
-                         np.nan)
-
-        # Ritaglia / resampla a n_pixels x n_pixels
-        # Se il crop è più grande del necessario, prendi il centro
-        nr, nc = lai.shape
+        valid    = data != MODIS_LAI_NODATA
+        lai      = np.where(valid,
+                            data.astype(float) * MODIS_LAI_SCALE,
+                            np.nan)
+        nr, nc   = lai.shape
         r0 = max(0, (nr - n_pixels) // 2)
         c0 = max(0, (nc - n_pixels) // 2)
-        lai_crop = lai[r0:r0+n_pixels, c0:c0+n_pixels]
-
-        # Pad se troppo piccolo
-        if lai_crop.shape != (n_pixels, n_pixels):
-            out = np.full((n_pixels, n_pixels), np.nan)
-            h   = min(lai_crop.shape[0], n_pixels)
-            w   = min(lai_crop.shape[1], n_pixels)
-            out[:h, :w] = lai_crop[:h, :w]
-            lai_crop = out
-
-        return lai_crop
-
+        crop     = lai[r0:r0+n_pixels, c0:c0+n_pixels]
+        out      = np.full((n_pixels, n_pixels), np.nan)
+        h, w     = min(crop.shape[0], n_pixels), min(crop.shape[1], n_pixels)
+        out[:h, :w] = crop[:h, :w]
+        return out
     except Exception:
         return None
 
@@ -385,90 +353,55 @@ def get_vegetation_indices(
     r86,
     cache_dir,
     landsat_start_year = LANDSAT_START_YEAR,
-    modis_start_date   = MODIS_START_DATE,
+    modis_start_year   = MODIS_START_YEAR,
     modis_n_pixels     = 5,
-    min_clear_fraction = 0.1,   # frazione minima pixel clear per usare scena
-    cloud_cover_max    = 80.0,  # max cloud% per includere scena nella ricerca
+    min_clear_fraction = 0.1,
+    cloud_cover_max    = 80.0,
     verbose            = True,
 ):
     """
-    Calcola gli indici di vegetazione per un sito CRNS.
+    Calcola indici di vegetazione per un sito CRNS.
 
-    Landsat (30m, footprint intero):
-        NDVI, EVI, NDWI, FCOVER
-        Medie mensili climatologiche + std + serie temporale
-
-    MODIS MCD15A3H (500m, 5x5 pixel):
-        LAI
-        Medie mensili climatologiche + std + serie temporale
+    Cache: 1 file Landsat + 1 file MODIS per sito.
+    Aggiornamento incrementale: solo le scene nuove vengono scaricate.
 
     Parameters
     ----------
-    lat, lon        : coordinate sensore WGS84
-    dx_grid         : 2D array offset easting [m]  (da clip_dem_to_radius)
-    dy_grid         : 2D array offset northing [m]
-    dist_grid       : 2D array distanza dal sensore [m]
-    r86             : raggio footprint [m]
-    cache_dir       : directory cache locale
-    landsat_start_year : primo anno Landsat (default 2013)
-    modis_start_date   : prima data MODIS (default '2002-07-04')
-    modis_n_pixels     : dimensione array MODIS (default 5x5)
-    min_clear_fraction : frazione minima pixel clear per usare la scena
-    cloud_cover_max    : soglia cloud cover per search STAC
-    verbose         : stampa progressi
-
-    Returns
-    -------
-    dict con:
-
-    === LANDSAT ===
-    Per ogni indice idx in {ndvi, evi, ndwi, fcover}:
-
-        landsat_{idx}_monthly_mean  : array (12,) media mensile pesata W(r)
-        landsat_{idx}_monthly_std   : array (12,) std interannuale
-        landsat_{idx}_monthly_nobs  : array (12,) n osservazioni valide
-        landsat_{idx}_current       : float, valore più recente
-        landsat_{idx}_current_date  : str, data scena più recente
-
-    landsat_timeseries : list di dict
-        [{'date': str, 'ndvi': float, 'evi': float,
-          'ndwi': float, 'fcover': float, 'n_clear': int}, ...]
-    landsat_scene_map  : dict mese->list di mappe 2D (per plotting)
-
-    === MODIS LAI ===
-        modis_lai_monthly_mean  : array (12,) media mensile dell'array 5x5
-        modis_lai_monthly_std   : array (12,) std
-        modis_lai_monthly_nobs  : array (12,) n osservazioni
-        modis_lai_current       : float, valore più recente (media 5x5)
-        modis_lai_current_date  : str
-        modis_lai_timeseries    : list di dict
-            [{'date': str, 'lai_mean': float,
-              'lai_std': float, 'lai_map': array(5,5)}, ...]
-
-    === CORRREZIONE CRNS ===
-        f_veg_monthly  : array (12,) fattore correzione Baatz 2015
-                         f_veg = exp(-0.257 * LAI / cos(sza_mean))
-                         sza_mean = 30° (angolo zenitale medio tipico)
-        f_veg_current  : float, valore attuale
-
-    === METADATA ===
-        lat, lon, r86
-        landsat_n_scenes_total  : int
-        modis_n_scenes_total    : int
-        cache_dir               : str
+    lat, lon            : coordinate WGS84
+    dx_grid, dy_grid    : offset metrici dal sensore (da clip_dem_to_radius)
+    dist_grid           : distanza dal sensore [m]
+    r86                 : raggio footprint [m]
+    cache_dir           : directory cache
+    landsat_start_year  : default 2013
+    modis_start_year    : default 2013
+    modis_n_pixels      : array MODIS NxN, default 5
+    min_clear_fraction  : frazione min pixel clear per usare scena
+    cloud_cover_max     : soglia cloud% STAC search
+    verbose             : stampa progressi
     """
-
     try:
         import pystac_client
         import planetary_computer
     except ImportError:
         raise ImportError(
-            "Installa: pip install pystac-client planetary-computer")
+            "pip install pystac-client planetary-computer")
 
     os.makedirs(cache_dir, exist_ok=True)
 
     now      = datetime.now(timezone.utc)
     date_end = now.strftime("%Y-%m-%d")
+
+    # Pesi radiali (costanti per il sito)
+    W_fp     = _weight_radial(dist_grid, r86)
+    fp_mask  = dist_grid <= r86
+    fp_pixels = int(fp_mask.sum())
+
+    def _weighted_mean_fp(arr):
+        valid = ~np.isnan(arr)
+        if not valid.any():
+            return np.nan
+        w = W_fp[valid]
+        return float(np.sum(w * arr[valid]) / w.sum()) if w.sum() > 0 else np.nan
 
     # ------------------------------------------------------------------ #
     # Connessione catalogo
@@ -482,345 +415,356 @@ def get_vegetation_indices(
     )
 
     # ------------------------------------------------------------------ #
-    # Bbox per Landsat (footprint) e MODIS (punto)
+    # Bbox
     # ------------------------------------------------------------------ #
-    c           = np.cos(np.radians(lat))
-    margin_lon  = (r86 * 1.3) / (111320.0 * c)
-    margin_lat  = (r86 * 1.3) / 111320.0
+    c            = np.cos(np.radians(lat))
+    margin_lon   = (r86 * 1.3) / (111320.0 * c)
+    margin_lat   = (r86 * 1.3) / 111320.0
     bbox_landsat = [lon - margin_lon, lat - margin_lat,
                     lon + margin_lon, lat + margin_lat]
     bbox_modis   = [lon - 0.01, lat - 0.01,
                     lon + 0.01, lat + 0.01]
 
-    # ------------------------------------------------------------------ #
-    # Search Landsat
-    # ------------------------------------------------------------------ #
-    landsat_start = f"{landsat_start_year}-01-01"
-    if verbose:
-        print(f"Searching Landsat C2 L2  {landsat_start} -> {date_end} ...",
-              flush=True)
+    # ================================================================== #
+    # LANDSAT
+    # ================================================================== #
+
+    # --- Carica cache esistente ---
+    ls_timeseries, ls_last_date = _load_landsat_cache(
+        cache_dir, lat, lon, r86, landsat_start_year)
+
+    if ls_last_date:
+        # Aggiornamento incrementale: cerca solo scene più recenti
+        ls_search_start = ls_last_date
+        if verbose:
+            print(f"Landsat cache: {len(ls_timeseries)} scenes, "
+                  f"last={ls_last_date}. Fetching updates ...", flush=True)
+    else:
+        ls_search_start = f"{landsat_start_year}-01-01"
+        if verbose:
+            print(f"Landsat: no cache, full download from "
+                  f"{ls_search_start} ...", flush=True)
 
     search_ls = catalog.search(
         collections = ["landsat-c2-l2"],
         bbox        = bbox_landsat,
-        datetime    = f"{landsat_start}/{date_end}",
+        datetime    = f"{ls_search_start}/{date_end}",
         query       = {"eo:cloud_cover": {"lt": cloud_cover_max}},
         max_items   = 2000,
     )
-    items_ls = list(search_ls.items())
-    if verbose:
-        print(f"  Found {len(items_ls)} Landsat scenes", flush=True)
+    items_ls = [it for it in search_ls.items()
+                if it.properties.get("platform", "") != "landsat-7"]
 
-    # ------------------------------------------------------------------ #
-    # Search MODIS
-    # ------------------------------------------------------------------ #
+    # Escludi item già in cache (stessa data o precedente)
+    if ls_last_date:
+        items_ls = [it for it in items_ls
+                    if (it.properties.get("datetime","") or
+                        it.properties.get("start_datetime","")) > ls_last_date]
+
     if verbose:
-        print(f"Searching MODIS MCD15A3H  {modis_start_date} -> {date_end} ...",
+        print(f"  {len(items_ls)} new Landsat scenes to download",
               flush=True)
+
+    # --- Download parallelo ---
+    lock = threading.Lock()
+    new_ls_scenes = []
+
+    def _proc_ls(item):
+        import planetary_computer as _pc
+        dt_str = (item.properties.get("datetime")
+                  or item.properties.get("start_datetime"))
+        if not dt_str:
+            return None
+        try:
+            dt_obj = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+        signed  = _pc.sign(item)
+        indices = _read_landsat_scene(
+            signed, lat, lon, r86, dx_grid, dy_grid)
+        if indices is None:
+            return None
+
+        n_clear = int(np.nansum(indices["clear"] > 0.5))
+        if fp_pixels > 0 and n_clear / fp_pixels < min_clear_fraction:
+            return None
+
+        scene_vals = {
+            idx: _weighted_mean_fp(indices[idx])
+            for idx in ["ndvi","evi","ndwi","fcover"]
+            if idx in indices
+        }
+        return dt_obj, scene_vals, n_clear, indices
+
+    done = [0]
+    n_ls = len(items_ls)
+    latest_ls = {}   # idx -> (val, date_str, map_arr)
+
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as pool:
+        futures = {pool.submit(_proc_ls, it): it for it in items_ls}
+        for fut in as_completed(futures):
+            res = fut.result()
+            done[0] += 1
+            if verbose and done[0] % 50 == 0:
+                print(f"  Landsat: {done[0]}/{n_ls} processed", flush=True)
+            if res is None:
+                continue
+            dt_obj, scene_vals, n_clear, indices = res
+            date_str = dt_obj.date().isoformat()
+            row = {"date": date_str,
+                   "year": dt_obj.year,
+                   "month": dt_obj.month,
+                   "n_clear": n_clear}
+            for idx in ["ndvi","evi","ndwi","fcover"]:
+                v = scene_vals.get(idx, np.nan)
+                row[idx] = float(v) if (v is not None
+                                        and not np.isnan(v)) else None
+            with lock:
+                new_ls_scenes.append(row)
+                # Aggiorna latest map
+                for idx in ["ndvi","evi","ndwi","fcover"]:
+                    v = row.get(idx)
+                    if v is not None:
+                        prev = latest_ls.get(idx)
+                        if prev is None or date_str > prev[1]:
+                            latest_ls[idx] = (v, date_str,
+                                              indices.get(idx))
+
+    # Merge con cache esistente e salva
+    ls_timeseries = ls_timeseries + new_ls_scenes
+    ls_timeseries.sort(key=lambda x: x["date"])
+    new_last = ls_timeseries[-1]["date"] if ls_timeseries else ls_last_date
+    if new_ls_scenes:
+        _save_landsat_cache(cache_dir, lat, lon, r86, landsat_start_year,
+                             ls_timeseries, new_last)
+        if verbose:
+            print(f"  Landsat cache updated: {len(ls_timeseries)} total scenes",
+                  flush=True)
+
+    # latest maps: prende le più recenti tra cache + nuove
+    ls_latest_map = {idx: latest_ls.get(idx, (None,None,None))[2]
+                     for idx in ["ndvi","evi","ndwi","fcover"]}
+    ls_latest_val = {}
+    ls_latest_date= {}
+    for idx in ["ndvi","evi","ndwi","fcover"]:
+        best = None
+        for row in reversed(ls_timeseries):
+            v = row.get(idx)
+            if v is not None:
+                best = (v, row["date"])
+                break
+        ls_latest_val[idx]  = best[0] if best else None
+        ls_latest_date[idx] = best[1] if best else None
+
+    # ================================================================== #
+    # MODIS
+    # ================================================================== #
+
+    mod_timeseries, mod_last_date = _load_modis_cache(
+        cache_dir, lat, lon, modis_start_year)
+
+    if mod_last_date:
+        mod_search_start = mod_last_date
+        if verbose:
+            print(f"MODIS cache: {len(mod_timeseries)} scenes, "
+                  f"last={mod_last_date}. Fetching updates ...", flush=True)
+    else:
+        mod_search_start = f"{modis_start_year}-01-01"
+        if verbose:
+            print(f"MODIS: no cache, full download from "
+                  f"{mod_search_start} ...", flush=True)
 
     search_mod = catalog.search(
         collections = ["modis-15A3H-061"],
         bbox        = bbox_modis,
-        datetime    = f"{modis_start_date}/{date_end}",
+        datetime    = f"{mod_search_start}/{date_end}",
         max_items   = 5000,
     )
     items_mod = list(search_mod.items())
-    if verbose:
-        print(f"  Found {len(items_mod)} MODIS scenes", flush=True)
-
-    # ------------------------------------------------------------------ #
-    # Strutture accumulo dati
-    # ------------------------------------------------------------------ #
-    # Landsat: per mese, lista di valori scalari (media W(r) nel footprint)
-    ls_monthly = {idx: {m: [] for m in range(1, 13)}
-                  for idx in ["ndvi", "evi", "ndwi", "fcover"]}
-    ls_timeseries = []
-    ls_latest     = {idx: (None, None) for idx in ["ndvi","evi","ndwi","fcover"]}
-    # Mappa 2D più recente per plotting
-    ls_latest_map = {idx: None for idx in ["ndvi","evi","ndwi","fcover"]}
-
-    # MODIS: per mese, lista di valori scalari (media 5x5)
-    mod_monthly = {m: [] for m in range(1, 13)}
-    mod_timeseries = []
-    mod_latest     = (None, None)   # (valore, data)
-    mod_latest_map = None
-
-    # ------------------------------------------------------------------ #
-    # Processa scene Landsat
-    # ------------------------------------------------------------------ #
-    W_fp = _weight_radial(dist_grid, r86)
-    W_fp_sum = W_fp.sum()
-
-    def _weighted_mean_fp(arr):
-        """Media pesata W(r) nel footprint, ignora NaN."""
-        valid = ~np.isnan(arr)
-        if not valid.any():
-            return np.nan
-        w = W_fp[valid]
-        return float(np.sum(w * arr[valid]) / w.sum()) if w.sum() > 0 else np.nan
+    if mod_last_date:
+        items_mod = [it for it in items_mod
+                     if (it.properties.get("datetime","") or
+                         it.properties.get("start_datetime",""))
+                        > mod_last_date]
 
     if verbose:
-        print("Processing Landsat scenes ...", flush=True)
+        print(f"  {len(items_mod)} new MODIS scenes to download", flush=True)
 
-    for i, item in enumerate(items_ls):
-        # Data della scena
+    new_mod_scenes = []
+    done_mod = [0]
+    n_mod = len(items_mod)
+    mod_latest_val  = None
+    mod_latest_date_ = None
+    mod_latest_map  = None
+
+    def _proc_mod(item):
+        import planetary_computer as _pc
         dt_str = (item.properties.get("datetime")
                   or item.properties.get("start_datetime"))
         if not dt_str:
-            continue
+            return None
         try:
-            dt_obj = datetime.fromisoformat(
-                dt_str.replace("Z", "+00:00"))
+            dt_obj = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
         except Exception:
-            continue
-
-        month = dt_obj.month
-
-        # Cache key
-        bbox_str = f"{bbox_landsat[0]:.4f}_{bbox_landsat[2]:.4f}"
-        ckey     = _cache_key(item.id, bbox_str)
-        cached, cached_meta = _cache_load(cache_dir, ckey)
-
-        if cached is not None:
-            indices = cached
-            n_clear = cached_meta.get("n_clear", 0)
-        else:
-            # Leggi scena
-            signed  = planetary_computer.sign(item)
-            indices = _read_landsat_scene(
-                signed, lat, lon, r86, dx_grid, dy_grid)
-
-            if indices is None:
-                continue
-
-            # Conta pixel clear
-            n_clear = int(np.nansum(indices["clear"] > 0.5))
-            fp_pixels = int((dist_grid <= r86).sum())
-
-            # Salva cache
-            _cache_save(cache_dir, ckey, indices,
-                        {"item_id": item.id,
-                         "date": dt_str,
-                         "n_clear": n_clear,
-                         "fp_pixels": fp_pixels})
-
-        # Scarta scena se troppo pochi pixel clear
-        fp_pixels = int((dist_grid <= r86).sum())
-        if fp_pixels > 0 and n_clear / fp_pixels < min_clear_fraction:
-            continue
-
-        # Calcola medie pesate
-        scene_vals = {}
-        for idx in ["ndvi", "evi", "ndwi", "fcover"]:
-            if idx in indices:
-                scene_vals[idx] = _weighted_mean_fp(indices[idx])
-                if not np.isnan(scene_vals[idx]):
-                    ls_monthly[idx][month].append(scene_vals[idx])
-
-        if any(not np.isnan(v) for v in scene_vals.values()):
-            ls_timeseries.append({
-                "date"   : dt_obj.date().isoformat(),
-                "year"   : dt_obj.year,
-                "month"  : month,
-                **{k: float(v) if not np.isnan(v) else None
-                   for k, v in scene_vals.items()},
-                "n_clear": n_clear,
-            })
-            # Aggiorna latest (items sono in ordine STAC, non cronologico)
-            for idx in ["ndvi", "evi", "ndwi", "fcover"]:
-                prev_date = ls_latest[idx][1]
-                if (scene_vals.get(idx) is not None and
-                        not np.isnan(scene_vals.get(idx, np.nan)) and
-                        (prev_date is None or dt_obj.date().isoformat() > prev_date)):
-                    ls_latest[idx] = (float(scene_vals[idx]),
-                                      dt_obj.date().isoformat())
-                    ls_latest_map[idx] = indices.get(idx)
-
-        if verbose and (i + 1) % 50 == 0:
-            print(f"  Landsat: {i+1}/{len(items_ls)} processed", flush=True)
-
-    # ------------------------------------------------------------------ #
-    # Processa scene MODIS
-    # ------------------------------------------------------------------ #
-    if verbose:
-        print("Processing MODIS LAI scenes ...", flush=True)
-
-    for i, item in enumerate(items_mod):
-        dt_str = (item.properties.get("datetime")
-                  or item.properties.get("start_datetime"))
-        if not dt_str:
-            continue
-        try:
-            dt_obj = datetime.fromisoformat(
-                dt_str.replace("Z", "+00:00"))
-        except Exception:
-            continue
-
-        month = dt_obj.month
-
-        ckey         = _cache_key(item.id, f"{lat:.4f}_{lon:.4f}")
-        cached, cmeta = _cache_load(cache_dir, ckey)
-
-        if cached is not None:
-            lai_map = cached.get("lai_map")
-            if lai_map is None:
-                continue
-        else:
-            signed  = planetary_computer.sign(item)
-            lai_map = _read_modis_lai_scene(
-                signed, lat, lon, modis_n_pixels)
-            if lai_map is None:
-                continue
-            _cache_save(cache_dir, ckey, {"lai_map": lai_map},
-                        {"item_id": item.id, "date": dt_str})
-
+            return None
+        signed  = _pc.sign(item)
+        lai_map = _read_modis_lai_scene(
+            signed, lat, lon, modis_n_pixels)
+        if lai_map is None:
+            return None
         lai_mean = float(np.nanmean(lai_map))
         lai_std  = float(np.nanstd(lai_map))
+        if np.isnan(lai_mean):
+            return None
+        return dt_obj, lai_mean, lai_std, lai_map
 
-        if not np.isnan(lai_mean):
-            mod_monthly[month].append(lai_mean)
-            mod_timeseries.append({
-                "date"    : dt_obj.date().isoformat(),
-                "year"    : dt_obj.year,
-                "month"   : month,
-                "lai_mean": lai_mean,
-                "lai_std" : lai_std,
-            })
-            prev = mod_latest[1]
-            if prev is None or dt_obj.date().isoformat() > prev:
-                mod_latest     = (lai_mean, dt_obj.date().isoformat())
-                mod_latest_map = lai_map.copy()
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as pool:
+        futures = {pool.submit(_proc_mod, it): it for it in items_mod}
+        for fut in as_completed(futures):
+            res = fut.result()
+            done_mod[0] += 1
+            if verbose and done_mod[0] % 200 == 0:
+                print(f"  MODIS: {done_mod[0]}/{n_mod} processed",
+                      flush=True)
+            if res is None:
+                continue
+            dt_obj, lai_mean, lai_std, lai_map = res
+            date_str = dt_obj.date().isoformat()
+            with lock:
+                new_mod_scenes.append({
+                    "date"    : date_str,
+                    "year"    : dt_obj.year,
+                    "month"   : dt_obj.month,
+                    "lai_mean": lai_mean,
+                    "lai_std" : lai_std,
+                })
+                if mod_latest_date_ is None or date_str > mod_latest_date_:
+                    mod_latest_val   = lai_mean
+                    mod_latest_date_ = date_str
+                    mod_latest_map   = lai_map.copy()
 
-        if verbose and (i + 1) % 200 == 0:
-            print(f"  MODIS: {i+1}/{len(items_mod)} processed", flush=True)
+    mod_timeseries = mod_timeseries + new_mod_scenes
+    mod_timeseries.sort(key=lambda x: x["date"])
+    mod_new_last = (mod_timeseries[-1]["date"]
+                    if mod_timeseries else mod_last_date)
+    if new_mod_scenes:
+        _save_modis_cache(cache_dir, lat, lon, modis_start_year,
+                           mod_timeseries, mod_new_last)
+        if verbose:
+            print(f"  MODIS cache updated: {len(mod_timeseries)} total scenes",
+                  flush=True)
 
-    # ------------------------------------------------------------------ #
-    # Aggregazione mensile
-    # ------------------------------------------------------------------ #
-    def _monthly_stats(monthly_dict):
-        means = np.full(12, np.nan)
-        stds  = np.full(12, np.nan)
-        nobs  = np.zeros(12, dtype=int)
-        for m in range(1, 13):
-            vals = monthly_dict[m]
-            if len(vals) >= 1:
-                means[m-1] = float(np.nanmean(vals))
-                stds[m-1]  = float(np.nanstd(vals)) if len(vals) > 1 else 0.0
-                nobs[m-1]  = len(vals)
+    # Latest MODIS dalla cache completa
+    if mod_latest_val is None and mod_timeseries:
+        last = mod_timeseries[-1]
+        mod_latest_val  = last["lai_mean"]
+        mod_latest_date_= last["date"]
+
+    # ================================================================== #
+    # Aggregazione mensile da timeseries complete
+    # ================================================================== #
+
+    def _monthly_stats_from_ts(ts, key):
+        by_month = {m: [] for m in range(1, 13)}
+        for row in ts:
+            v = row.get(key)
+            if v is not None and not np.isnan(float(v)):
+                by_month[row["month"]].append(float(v))
+        means = np.array([np.nanmean(by_month[m]) if by_month[m]
+                          else np.nan for m in range(1,13)])
+        stds  = np.array([np.nanstd(by_month[m])  if len(by_month[m])>1
+                          else 0.0 for m in range(1,13)])
+        nobs  = np.array([len(by_month[m]) for m in range(1,13)])
         return means, stds, nobs
 
-    # ------------------------------------------------------------------ #
     # Correzione f_veg Baatz 2015
-    # LAI -> f_veg = exp(-0.257 * LAI / cos(SZA))
-    # SZA medio ~30° (tipico latitudine 46N, mezzogiorno)
-    # ------------------------------------------------------------------ #
-    SZA_MEAN_RAD = np.radians(30.0)
-    lai_means, _, _ = _monthly_stats(mod_monthly)
-    f_veg_monthly = np.where(
+    SZA_RAD = np.radians(30.0)
+    lai_means, _, _ = _monthly_stats_from_ts(mod_timeseries, "lai_mean")
+    f_veg_monthly   = np.where(
         ~np.isnan(lai_means),
-        np.exp(-0.257 * lai_means / np.cos(SZA_MEAN_RAD)),
+        np.exp(-0.257 * lai_means / np.cos(SZA_RAD)),
         np.nan)
+    f_veg_current   = (float(np.exp(-0.257 * mod_latest_val
+                                    / np.cos(SZA_RAD)))
+                       if mod_latest_val is not None else None)
 
-    f_veg_current = np.nan
-    if mod_latest[0] is not None:
-        f_veg_current = float(np.exp(
-            -0.257 * mod_latest[0] / np.cos(SZA_MEAN_RAD)))
-
-    # ------------------------------------------------------------------ #
-    # Ordina serie temporali per data
-    # ------------------------------------------------------------------ #
-    ls_timeseries.sort(key=lambda x: x["date"])
-    mod_timeseries.sort(key=lambda x: x["date"])
-
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
     # Assembla risultato
-    # ------------------------------------------------------------------ #
+    # ================================================================== #
     result = {}
 
-    for idx in ["ndvi", "evi", "ndwi", "fcover"]:
-        mn, sd, nb = _monthly_stats(ls_monthly[idx])
+    for idx in ["ndvi","evi","ndwi","fcover"]:
+        mn, sd, nb = _monthly_stats_from_ts(ls_timeseries, idx)
         result[f"landsat_{idx}_monthly_mean"] = mn
         result[f"landsat_{idx}_monthly_std"]  = sd
         result[f"landsat_{idx}_monthly_nobs"] = nb
-        result[f"landsat_{idx}_current"]      = ls_latest[idx][0]
-        result[f"landsat_{idx}_current_date"] = ls_latest[idx][1]
-        result[f"landsat_{idx}_latest_map"]   = ls_latest_map[idx]
+        result[f"landsat_{idx}_current"]      = ls_latest_val.get(idx)
+        result[f"landsat_{idx}_current_date"] = ls_latest_date.get(idx)
+        result[f"landsat_{idx}_latest_map"]   = ls_latest_map.get(idx)
 
-    lai_means, lai_stds, lai_nobs = _monthly_stats(mod_monthly)
-    result["modis_lai_monthly_mean"]  = lai_means
-    result["modis_lai_monthly_std"]   = lai_stds
-    result["modis_lai_monthly_nobs"]  = lai_nobs
-    result["modis_lai_current"]       = mod_latest[0]
-    result["modis_lai_current_date"]  = mod_latest[1]
+    lai_mn, lai_sd, lai_nb = _monthly_stats_from_ts(
+        mod_timeseries, "lai_mean")
+    result["modis_lai_monthly_mean"]  = lai_mn
+    result["modis_lai_monthly_std"]   = lai_sd
+    result["modis_lai_monthly_nobs"]  = lai_nb
+    result["modis_lai_current"]       = mod_latest_val
+    result["modis_lai_current_date"]  = mod_latest_date_
     result["modis_lai_latest_map"]    = mod_latest_map
 
-    result["f_veg_monthly"]  = f_veg_monthly
-    result["f_veg_current"]  = f_veg_current
+    result["f_veg_monthly"]           = f_veg_monthly
+    result["f_veg_current"]           = f_veg_current
 
-    result["landsat_timeseries"]     = ls_timeseries
-    result["modis_lai_timeseries"]   = mod_timeseries
+    result["landsat_timeseries"]      = ls_timeseries
+    result["modis_lai_timeseries"]    = mod_timeseries
 
-    result["lat"]                    = lat
-    result["lon"]                    = lon
-    result["r86"]                    = r86
-    result["landsat_n_scenes_total"] = len(items_ls)
-    result["modis_n_scenes_total"]   = len(items_mod)
-    result["cache_dir"]              = cache_dir
-    result["months"]                 = ["Jan","Feb","Mar","Apr","May","Jun",
-                                        "Jul","Aug","Sep","Oct","Nov","Dec"]
-
+    result["lat"]                     = lat
+    result["lon"]                     = lon
+    result["r86"]                     = r86
+    result["landsat_n_scenes_total"]  = len(ls_timeseries)
+    result["modis_n_scenes_total"]    = len(mod_timeseries)
+    result["cache_dir"]               = cache_dir
+    result["months"]                  = ["Jan","Feb","Mar","Apr","May","Jun",
+                                         "Jul","Aug","Sep","Oct","Nov","Dec"]
     return result
 
 
 def report_vegetation(res):
-    """Stampa testuale dei risultati."""
     M  = res["months"]
     w  = 72
     L  = ["="*w,
           "VEGETATION INDICES — Monthly Climatology",
           "="*w,
-          f"  Landsat scenes : {res['landsat_n_scenes_total']}  "
-          f"(from {LANDSAT_START_YEAR})",
-          f"  MODIS scenes   : {res['modis_n_scenes_total']}  "
-          f"(from {MODIS_START_DATE})",
+          f"  Landsat scenes : {res['landsat_n_scenes_total']}",
+          f"  MODIS scenes   : {res['modis_n_scenes_total']}",
           ""]
-
-    hdr = "  " + " "*14 + "  ".join(f"{m:>5}" for m in M)
+    hdr = "  " + " "*10 + "  ".join(f"{m:>5}" for m in M)
     L.append(hdr)
     L.append("  " + "-"*(w-2))
-
     for idx in ["ndvi","evi","ndwi","fcover"]:
         mn = res[f"landsat_{idx}_monthly_mean"]
         sd = res[f"landsat_{idx}_monthly_std"]
         nb = res[f"landsat_{idx}_monthly_nobs"]
         mn_s = "  ".join(f"{v:5.3f}" if not np.isnan(v) else "  N/A" for v in mn)
         sd_s = "  ".join(f"{v:5.3f}" if not np.isnan(v) else "  N/A" for v in sd)
-        nb_s = "  ".join(f"{v:5d}" for v in nb)
         cur  = res[f"landsat_{idx}_current"]
+        cur_d= res[f"landsat_{idx}_current_date"]
         L.append(f"  {idx.upper():<8} mean  {mn_s}")
-        L.append(f"  {'':<8} std   {sd_s}")
-        L.append(f"  {'':<8} nobs  {nb_s}")
-        L.append(f"  {'':<8} current = "
-                 f"{cur:.3f}  ({res[f'landsat_{idx}_current_date']})"
-                 if cur is not None else f"  {'':<8} current = N/A")
+        L.append(f"           std   {sd_s}")
+        L.append(f"           nobs  {'  '.join(f'{v:5d}' for v in nb)}")
+        L.append(f"           curr  {cur:.3f} ({cur_d})"
+                 if cur is not None else "           curr  N/A")
         L.append("")
-
     mn = res["modis_lai_monthly_mean"]
-    sd = res["modis_lai_monthly_std"]
-    nb = res["modis_lai_monthly_nobs"]
     mn_s = "  ".join(f"{v:5.2f}" if not np.isnan(v) else "  N/A" for v in mn)
     cur  = res["modis_lai_current"]
+    cur_d= res["modis_lai_current_date"]
     L.append(f"  {'LAI':<8} mean  {mn_s}")
-    L.append(f"  {'':<8} current = "
-             f"{cur:.2f}  ({res['modis_lai_current_date']})"
-             if cur is not None else f"  {'':<8} current = N/A")
+    L.append(f"           curr  {cur:.2f} ({cur_d})"
+             if cur is not None else "           curr  N/A")
     L.append("")
-
-    fv = res["f_veg_monthly"]
+    fv   = res["f_veg_monthly"]
     fv_s = "  ".join(f"{v:5.3f}" if not np.isnan(v) else "  N/A" for v in fv)
-    L.append(f"  {'f_veg':<8} Baatz {fv_s}")
-    L.append(f"  (f_veg = exp(-0.257*LAI/cos(30°)), "
-             f"current={res['f_veg_current']:.3f})"
-             if res['f_veg_current'] is not None else "")
+    L.append(f"  {'f_veg':<8}       {fv_s}")
     L.append("="*w)
     return "\n".join(L)
