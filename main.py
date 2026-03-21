@@ -82,7 +82,9 @@ from site_climate       import get_site_climate, report_site_climate
 from terrain_indices    import (compute_twi, report_twi,
                                 compute_thermal_index, report_thermal_index)
 from get_soil_properties import get_soil_properties, report_soil_properties
-from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail)
+from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
+                   plot_climate, plot_soil, plot_thermal, plot_twi,
+                   plot_kappa_budget)
 from reports import write_report
 
 try:
@@ -651,13 +653,26 @@ def main():
                     az_neutron, overlap_az, r86, z86, kappa_topo,
                     _outpath("crns_fov_detail.png"),
                     lat=LAT, lon=LON, sensor_alt=s_elev)
+    plot_climate(site_climate, thermal,
+                 _outpath("crns_climate.png"),
+                 lat=LAT, lon=LON, sensor_alt=s_elev)
+    plot_soil(soil, _outpath("crns_soil.png"), lat=LAT, lon=LON)
+    plot_thermal(site_climate, thermal,
+                 _outpath("crns_thermal.png"),
+                 lat=LAT, lon=LON, sensor_alt=s_elev)
+    plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86,
+             _outpath("crns_twi.png"), lat=LAT, lon=LON)
+    plot_kappa_budget(results, _outpath("crns_kappa_budget.png"),
+                      lat=LAT, lon=LON)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")
     print(f"  Output dir : {_OUT}")
     print(f"  Files:")
-    for fn in ["crns_report.txt","crns_topo_main.png",
-               "crns_footprint.png","crns_horizon.png","crns_fov_detail.png"]:
+    for fn in ["crns_report.txt", "crns_topo_main.png",
+               "crns_footprint.png", "crns_horizon.png", "crns_fov_detail.png",
+               "crns_climate.png", "crns_soil.png", "crns_thermal.png",
+               "crns_twi.png", "crns_kappa_budget.png"]:
         p = _outpath(fn)
         sz_kb = os.path.getsize(p)//1024 if os.path.exists(p) else 0
         print(f"    {fn}  ({sz_kb} kB)")
