@@ -515,3 +515,121 @@ def plot_climate(site_climate, thermal, path, lat, lon, sensor_alt):
         fig.savefig(path, dpi=200, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_soil(soil, path, lat, lon):
+    """Four-panel soil characterization:
+    heatmap of all 9 properties x 6 depths, physical profiles,
+    geochemical profiles, CRNS-weighted summary bar chart."""
+    PROPS  = ['bdod','clay','sand','silt','soc','phh2o','cec','cfvo','nitrogen']
+    PLBLS  = ['Bulk density\n(g/cm\u00b3)','Clay\n(%)','Sand\n(%)','Silt\n(%)',
+              'SOC\n(g/kg)','pH\n(H\u2082O)','CEC\n(cmol/kg)',
+              'Coarse frags\n(%)','Nitrogen\n(g/kg)']
+    DEPTHS = ['0-5','5-15','15-30','30-60','60-100','100-200']
+    DMID   = np.array([2.5, 10.0, 22.5, 45.0, 80.0, 150.0])
+
+    with plt.rc_context(STYLE):
+        fig = plt.figure(figsize=(22, 16))
+        gs  = GridSpec(2, 2, figure=fig, hspace=0.42, wspace=0.38)
+
+        # (0,0) Normalised heatmap
+        ax  = fig.add_subplot(gs[0, 0])
+        mat = np.full((len(PROPS), 6), np.nan)
+        for i, p in enumerate(PROPS):
+            vals = np.asarray(soil.get(f'{p}_profile', {}).get('mean',
+                              np.full(6, np.nan)), dtype=float)
+            mat[i, :] = vals
+        mat_n = np.full_like(mat, np.nan)
+        for i in range(len(PROPS)):
+            row = mat[i]
+            lo, hi = np.nanmin(row), np.nanmax(row)
+            if not np.isnan(lo) and hi > lo:
+                mat_n[i] = (row - lo) / (hi - lo)
+            elif not np.isnan(lo):
+                mat_n[i] = 0.5
+        im = ax.imshow(mat_n, aspect='auto', cmap='YlOrBr', vmin=0, vmax=1,
+                       interpolation='nearest')
+        plt.colorbar(im, ax=ax, fraction=0.04, pad=0.02).set_label(
+            'Normalised value (0=min, 1=max per property)', fontsize=9)
+        ax.set_xticks(range(6)); ax.set_xticklabels(DEPTHS, fontsize=9)
+        ax.set_yticks(range(len(PROPS))); ax.set_yticklabels(PLBLS, fontsize=9)
+        ax.set_xlabel('Depth layer (cm)')
+        ax.set_title('Soil Property Heatmap (normalised per property)\nSoilGrids v2.0 ISRIC 250 m')
+        for i in range(len(PROPS)):
+            for j in range(6):
+                v = mat[i, j]
+                if not np.isnan(v):
+                    ax.text(j, i, f'{v:.2g}', ha='center', va='center', fontsize=7.5,
+                            color='white' if (not np.isnan(mat_n[i,j]) and mat_n[i,j] > 0.6) else 'black')
+
+        # (0,1) Physical profiles: bdod, clay, sand, silt
+        ax = fig.add_subplot(gs[0, 1])
+        for prop, col, lbl in [('bdod','#e67e22','Bulk density (g/cm\u00b3)'),
+                                ('clay','#c0392b','Clay (%)'),
+                                ('sand','#f1c40f','Sand (%)'),
+                                ('silt','#95a5a6','Silt (%)')]:
+            prof = soil.get(f'{prop}_profile', {})
+            vals = np.asarray(prof.get('mean', np.full(6, np.nan)), dtype=float)
+            unc  = np.asarray(prof.get('uncertainty', np.zeros(6)), dtype=float)
+            mask = ~np.isnan(vals)
+            if np.any(mask):
+                ax.plot(vals[mask], DMID[mask], 'o-', color=col, lw=2, ms=7, label=lbl)
+                ax.fill_betweenx(DMID[mask], np.maximum(0, vals[mask]-unc[mask]),
+                                 vals[mask]+unc[mask], alpha=0.15, color=col)
+        ax.invert_yaxis(); ax.set_ylim(200, 0)
+        ax.set_xlabel('Value'); ax.set_ylabel('Depth midpoint (cm)')
+        ax.set_title('Physical Soil Profiles\n(mean \u00b1 uncertainty shading)')
+        ax.legend(fontsize=9)
+
+        # (1,0) Geochemical profiles: soc, pH, CEC, cfvo, nitrogen
+        ax = fig.add_subplot(gs[1, 0])
+        for prop, col, lbl in [('soc',     '#27ae60','SOC (g/kg)'),
+                                ('phh2o',  '#8e44ad','pH (H\u2082O)'),
+                                ('cec',    '#2980b9','CEC (cmol/kg)'),
+                                ('cfvo',   '#7f8c8d','Coarse frags (%)'),
+                                ('nitrogen','#16a085','Nitrogen (g/kg)')]:
+            prof = soil.get(f'{prop}_profile', {})
+            vals = np.asarray(prof.get('mean', np.full(6, np.nan)), dtype=float)
+            unc  = np.asarray(prof.get('uncertainty', np.zeros(6)), dtype=float)
+            mask = ~np.isnan(vals)
+            if np.any(mask):
+                ax.plot(vals[mask], DMID[mask], 's-', color=col, lw=2, ms=7, label=lbl)
+                ax.fill_betweenx(DMID[mask], np.maximum(0, vals[mask]-unc[mask]),
+                                 vals[mask]+unc[mask], alpha=0.15, color=col)
+        ax.invert_yaxis(); ax.set_ylim(200, 0)
+        ax.set_xlabel('Value'); ax.set_ylabel('Depth midpoint (cm)')
+        ax.set_title('Geochemical Soil Profiles\n(SOC / pH / CEC / coarse frags / N)')
+        ax.legend(fontsize=9)
+
+        # (1,1) CRNS-weighted means horizontal bar chart
+        ax    = fig.add_subplot(gs[1, 1])
+        means, uncs, lbls = [], [], []
+        COLS  = ['#e67e22','#c0392b','#f1c40f','#95a5a6',
+                 '#27ae60','#8e44ad','#2980b9','#7f8c8d','#16a085']
+        for p, lbl in zip(PROPS, PLBLS):
+            v = soil.get(f'{p}_crns')
+            u = soil.get(f'{p}_crns_unc')
+            means.append(float(v) if v is not None and not np.isnan(float(v)) else np.nan)
+            uncs.append( float(u) if u is not None and not np.isnan(float(u)) else 0.0)
+            lbls.append(lbl.replace('\n',' '))
+        y = np.arange(len(PROPS))
+        ax.barh(y, means, xerr=uncs, color=COLS, alpha=0.82, edgecolor='white',
+                height=0.7, capsize=4, error_kw=dict(lw=1.5, capthick=1.5))
+        ax.set_yticks(y); ax.set_yticklabels(lbls, fontsize=9)
+        ax.set_xlabel('CRNS-weighted mean value')
+        ax.set_title('CRNS-Weighted Soil Properties\n(z86 exponential depth weighting)')
+        lw_gg   = soil.get('lattice_water_gg', np.nan)
+        lw_str  = f'{float(lw_gg):.4f} g/g' if lw_gg is not None and not np.isnan(float(lw_gg)) else 'N/A'
+        ax.text(0.98, 0.03,
+                f"Texture: {soil.get('texture_class','N/A')}\n"
+                f"WRB: {soil.get('wrb_class','N/A')}\n"
+                f"Lattice water: {lw_str}",
+                transform=ax.transAxes, fontsize=10, ha='right', va='bottom',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='#ecf0f1', alpha=0.85))
+
+        fig.suptitle(
+            f"Soil Characterization  |  {lat:.4f}N {lon:.4f}E  |  SoilGrids v2.0 ISRIC 250 m",
+            fontsize=14, fontweight='bold', y=1.01)
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+    print(f"  Saved: {path}")
