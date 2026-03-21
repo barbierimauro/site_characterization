@@ -746,3 +746,114 @@ def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
         fig.savefig(path, dpi=200, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
+
+
+def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
+    """Four-panel TWI analysis: 2D TWI map, 2D slope map,
+    TWI class histogram, radial TWI + slope profile."""
+    with plt.rc_context(STYLE):
+        fig  = plt.figure(figsize=(20, 14))
+        gs   = GridSpec(2, 2, figure=fig, hspace=0.40, wspace=0.38)
+        th   = np.linspace(0, 2*np.pi, 360)
+        clip = min(1.5 * r86, 800.0)
+
+        twi_map   = twi.get('twi_map')
+        slope_map = twi.get('slope_map_deg')
+        fracs     = np.asarray(twi.get('twi_class_fractions', np.full(5, np.nan)), dtype=float)
+        twi_w     = twi.get('twi_weighted',    np.nan)
+        twi_mean  = twi.get('twi_mean_fp',     np.nan)
+        twi_std   = twi.get('twi_std_fp',      np.nan)
+        twi_lo    = twi.get('twi_min_fp',      np.nan)
+        twi_hi    = twi.get('twi_max_fp',      np.nan)
+        sl_mean   = twi.get('slope_mean_fp_deg', np.nan)
+
+        def _circle(ax):
+            ax.plot(r86*np.sin(th), r86*np.cos(th), 'k--', lw=2, label=f'r86={r86:.0f} m')
+            ax.plot(0, 0, 'k^', ms=10, zorder=5, label='Sensor')
+
+        # (0,0) TWI map
+        ax = fig.add_subplot(gs[0, 0])
+        if twi_map is not None:
+            vlo, vhi = np.nanpercentile(twi_map, 2), np.nanpercentile(twi_map, 98)
+            cm = ax.pcolormesh(dx_grid, dy_grid, twi_map,
+                               cmap='RdYlGn', shading='auto', vmin=vlo, vmax=vhi)
+            plt.colorbar(cm, ax=ax, fraction=0.03, pad=0.02).set_label(
+                'TWI  ln[a / tan\u03b2]', fontsize=9)
+        _circle(ax)
+        ax.set_aspect('equal')
+        ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
+        ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
+        ax.set_title(f'Topographic Wetness Index\nCRNS-weighted = {float(twi_w):.2f}'
+                     f'  |  FP mean = {float(twi_mean):.2f}')
+        ax.legend(fontsize=9)
+
+        # (0,1) Slope map
+        ax = fig.add_subplot(gs[0, 1])
+        if slope_map is not None:
+            vhi_sl = np.nanpercentile(slope_map, 98)
+            cm2 = ax.pcolormesh(dx_grid, dy_grid, slope_map,
+                                cmap='YlOrRd', shading='auto', vmin=0, vmax=vhi_sl)
+            plt.colorbar(cm2, ax=ax, fraction=0.03, pad=0.02).set_label('Slope (\u00b0)', fontsize=9)
+        _circle(ax)
+        ax.set_aspect('equal')
+        ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
+        ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
+        ax.set_title(f'Slope Map\nMean within footprint = {float(sl_mean):.1f}\u00b0')
+        ax.legend(fontsize=9)
+
+        # (1,0) TWI class histogram
+        ax     = fig.add_subplot(gs[1, 0])
+        cls_n  = ['Very dry\n(ridges)', 'Dry', 'Moderate', 'Moist', 'Very wet\n(hollows)']
+        cls_c  = ['#e74c3c','#e67e22','#f1c40f','#2980b9','#1a5276']
+        bars   = ax.bar(range(5), fracs * 100, color=cls_c, edgecolor='white', lw=1.5, width=0.65)
+        for bar, v in zip(bars, fracs):
+            if not np.isnan(v):
+                ax.text(bar.get_x() + bar.get_width()/2, v*100 + 0.5,
+                        f'{v*100:.1f}%', ha='center', va='bottom', fontsize=9, fontweight='bold')
+        ax.set_xticks(range(5)); ax.set_xticklabels(cls_n, fontsize=9)
+        ax.set_ylabel('Fraction of footprint area (%)')
+        ax.set_title('TWI Class Distribution within Footprint\n'
+                     '(5-percentile classes of full DEM extent)')
+        ax.text(0.98, 0.97,
+                f"CRNS-weighted TWI: {float(twi_w):.2f}\n"
+                f"FP mean: {float(twi_mean):.2f} \u00b1 {float(twi_std):.2f}\n"
+                f"Range: {float(twi_lo):.1f} \u2013 {float(twi_hi):.1f}",
+                transform=ax.transAxes, fontsize=9, ha='right', va='top',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='#ecf0f1', alpha=0.85))
+
+        # (1,1) Radial TWI + slope profile
+        ax    = fig.add_subplot(gs[1, 1])
+        r_bins = np.arange(0, r86 + 20, 20.0)
+        r_mid  = 0.5 * (r_bins[:-1] + r_bins[1:])
+        twi_r  = np.full(len(r_mid), np.nan)
+        sl_r   = np.full(len(r_mid), np.nan)
+        for k, (r0, r1) in enumerate(zip(r_bins[:-1], r_bins[1:])):
+            ring = (dist_grid >= r0) & (dist_grid < r1)
+            if not np.any(ring): continue
+            if twi_map is not None:
+                tv = twi_map[ring]; tv = tv[~np.isnan(tv)]
+                if len(tv): twi_r[k] = float(np.mean(tv))
+            if slope_map is not None:
+                sv = slope_map[ring]; sv = sv[~np.isnan(sv)]
+                if len(sv): sl_r[k] = float(np.mean(sv))
+        ax.plot(r_mid, twi_r, 'o-', color='#27ae60', lw=2.5, ms=7, label='Mean TWI')
+        ax.axhline(float(twi_mean), color='#27ae60', ls='--', lw=1.2, alpha=0.7,
+                   label=f'FP mean TWI={float(twi_mean):.2f}')
+        ax.set_xlabel('Distance from sensor (m)')
+        ax.set_ylabel('Mean TWI', color='#27ae60')
+        ax.tick_params(axis='y', labelcolor='#27ae60')
+        ax2 = ax.twinx()
+        ax2.plot(r_mid, sl_r, 's-', color='#e74c3c', lw=2.5, ms=7, label='Mean slope (\u00b0)')
+        ax2.set_ylabel('Mean slope (\u00b0)', color='#e74c3c')
+        ax2.tick_params(axis='y', labelcolor='#e74c3c')
+        ax.axvline(r86, color='gray', ls=':', lw=1.5, label=f'r86={r86:.0f} m')
+        ax.set_title('Radial Profile: TWI and Slope\n(mean per 20 m ring from sensor)')
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=8)
+
+        fig.suptitle(f"Topographic Wetness Index  |  {lat:.4f}N {lon:.4f}E",
+                     fontsize=14, fontweight='bold', y=1.01)
+        fig.savefig(path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+    print(f"  Saved: {path}")
