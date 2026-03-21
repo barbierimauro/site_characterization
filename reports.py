@@ -4,10 +4,11 @@
 
 import numpy as np
 from kappa_topo_3d      import report_kappa_3d
-from site_fluxes        import report_site_fluxes
-from site_climate       import report_site_climate
+from site_fluxes        import report_site_fluxes, report_desilets_curve
+from site_climate       import report_site_climate, report_power_budget
 from terrain_indices    import report_twi, report_thermal_index
 from get_soil_properties import report_soil_properties
+from vegetation_indices  import report_snow_cover
 
 
 def write_report(path, params, results):
@@ -96,8 +97,16 @@ def write_report(path, params, results):
     s(report_site_fluxes(results['site_fluxes']))
     s()
 
+    h("DESILETS CURVE — N(θ_v) EXPECTED RANGE")
+    s(report_desilets_curve(results['desilets_curve']))
+    s()
+
     h("SITE CLIMATE")
     s(report_site_climate(results['site_climate']))
+    s()
+
+    h("POWER BUDGET — SOLAR PANEL & BATTERY")
+    s(report_power_budget(results['power_budget']))
     s()
 
     h("SOIL PROPERTIES")
@@ -115,6 +124,10 @@ def write_report(path, params, results):
         sc['T_mean_monthly_C'],
         sc['T_min_monthly_C'],
         sc['T_max_monthly_C']))
+    s()
+
+    h("SNOW COVER — MODIS MOD10A1")
+    s(report_snow_cover(results['snow']))
     s()
 
     h("OUTPUT FILES — DESCRIPTION")

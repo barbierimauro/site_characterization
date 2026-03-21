@@ -120,6 +120,42 @@ def _save_landsat_cache(cache_dir, lat, lon, r86, start_year,
                    "start_year": start_year}, f, indent=2)
 
 
+def _snow_cache_path(cache_dir, lat, lon, start_year):
+    h = _site_hash(lat, lon, 0.0, start_year)
+    return (os.path.join(cache_dir, f"snow_cache_{h}.npz"),
+            os.path.join(cache_dir, f"snow_cache_{h}.json"))
+
+
+def _load_snow_cache(cache_dir, lat, lon, start_year):
+    """
+    Carica la cache snow cover.
+    Ritorna (timeseries_list, last_date_str).
+    timeseries_list: lista di dict {date, year, month, snow_cover_pct}
+    """
+    npz, meta = _snow_cache_path(cache_dir, lat, lon, start_year)
+    if not (os.path.exists(npz) and os.path.exists(meta)):
+        return [], None
+    try:
+        d  = np.load(npz, allow_pickle=True)
+        ts = d["timeseries"].tolist()
+        with open(meta) as f:
+            m = json.load(f)
+        return ts, m.get("last_date")
+    except Exception:
+        return [], None
+
+
+def _save_snow_cache(cache_dir, lat, lon, start_year, timeseries, last_date):
+    os.makedirs(cache_dir, exist_ok=True)
+    npz, meta = _snow_cache_path(cache_dir, lat, lon, start_year)
+    np.savez_compressed(npz, timeseries=np.array(timeseries, dtype=object))
+    with open(meta, "w") as f:
+        json.dump({"last_date": last_date,
+                   "n_scenes": len(timeseries),
+                   "lat": lat, "lon": lon,
+                   "start_year": start_year}, f, indent=2)
+
+
 def _load_modis_cache(cache_dir, lat, lon, start_year):
     """
     Carica la cache MODIS.
@@ -727,6 +763,321 @@ def get_vegetation_indices(
     result["months"]                  = ["Jan","Feb","Mar","Apr","May","Jun",
                                          "Jul","Aug","Sep","Oct","Nov","Dec"]
     return result
+
+
+def _read_modis_snow_scene(signed_item, lat, lon, n_pixels=5):
+    """
+    Legge la copertura nevosa da una scena MODIS MOD10A1 (500m, giornaliero).
+
+    Tenta i band names: 'NDSI_Snow_Cover' e 'CGF_NDSI_Snow_Cover'.
+    Valori validi: 0–100 (% di copertura nevosa NDSI).
+    Valori speciali (> 100) ignorati (notte, oceano, cloud, fill, etc.).
+
+    Ritorna array (n_pixels × n_pixels) oppure None se fallisce.
+    """
+    import rasterio
+    from rasterio.warp import transform_bounds
+    from rasterio.windows import from_bounds
+    from rasterio.crs import CRS
+
+    band_name = None
+    for candidate in ["NDSI_Snow_Cover", "CGF_NDSI_Snow_Cover",
+                      "NDSI_Snow_Cover_Basic_QA"]:
+        if candidate in signed_item.assets:
+            band_name = "NDSI_Snow_Cover" if "NDSI_Snow_Cover" in signed_item.assets \
+                        else candidate
+            break
+    # Se nessuno dei candidati è trovato, usa il primo asset disponibile
+    # che contenga "Snow" nel nome
+    if band_name is None:
+        for aname in signed_item.assets:
+            if "snow" in aname.lower() or "Snow" in aname:
+                band_name = aname
+                break
+    if band_name is None:
+        return None
+
+    href  = signed_item.assets[band_name].href
+    wgs84 = CRS.from_epsg(4326)
+    c     = np.cos(np.radians(lat))
+    margin_m   = (n_pixels / 2 + 0.5) * 500.0
+    margin_lon = margin_m / (111320.0 * c)
+    margin_lat = margin_m / 111320.0
+
+    try:
+        with rasterio.open(href) as src:
+            l, b, r, t = transform_bounds(
+                wgs84, src.crs,
+                lon - margin_lon, lat - margin_lat,
+                lon + margin_lon, lat + margin_lat)
+            win  = from_bounds(l, b, r, t, transform=src.transform)
+            data = src.read(1, window=win)
+
+        # Valori 0–100 = % copertura neve; tutto il resto = dato invalido
+        valid = (data >= 0) & (data <= 100)
+        snow  = np.where(valid, data.astype(float), np.nan)
+
+        nr, nc = snow.shape
+        r0     = max(0, (nr - n_pixels) // 2)
+        c0     = max(0, (nc - n_pixels) // 2)
+        crop   = snow[r0:r0+n_pixels, c0:c0+n_pixels]
+        out    = np.full((n_pixels, n_pixels), np.nan)
+        h_, w_ = min(crop.shape[0], n_pixels), min(crop.shape[1], n_pixels)
+        out[:h_, :w_] = crop[:h_, :w_]
+        return out
+    except Exception:
+        return None
+
+
+def get_snow_cover(
+    lat,
+    lon,
+    cache_dir,
+    start_year = MODIS_START_YEAR,
+    n_pixels   = 5,
+    verbose    = True,
+):
+    """
+    Scarica la copertura nevosa stagionale da MODIS MOD10A1.061
+    (Terra Snow Cover Daily Global 500m) via Planetary Computer.
+
+    Struttura di cache identica a MODIS LAI (aggiornamento incrementale):
+        snow_cache_{hash16}.npz  + .json
+
+    Parameters
+    ----------
+    lat, lon   : coordinate WGS84
+    cache_dir  : directory per cache
+    start_year : primo anno di download (default 2013)
+    n_pixels   : array NxN di pixel MODIS centrati sul sito (default 5 = 2.5km)
+    verbose    : stampa progressi
+
+    Returns
+    -------
+    dict con:
+        snow_cover_monthly_pct  array (12,) copertura neve media mensile [%]
+        snow_cover_monthly_std  array (12,) deviazione std mensile [%]
+        snow_days_monthly       array (12,) giorni medi con snow_cover > 50%
+        snow_cover_annual_pct   float       media annuale [%]
+        snow_days_annual        float       totale giorni/anno con neve
+        snow_months             list        mesi (nome) con snow_days > 15
+        n_scenes_total          int         scene in cache
+        months                  list        nomi mesi
+    """
+    try:
+        import pystac_client
+        import planetary_computer
+    except ImportError:
+        raise ImportError("pip install pystac-client planetary-computer")
+
+    os.makedirs(cache_dir, exist_ok=True)
+    now      = datetime.now(timezone.utc)
+    date_end = now.strftime("%Y-%m-%d")
+
+    # ------------------------------------------------------------------ #
+    # Cache
+    # ------------------------------------------------------------------ #
+    snow_timeseries, snow_last_date = _load_snow_cache(
+        cache_dir, lat, lon, start_year)
+
+    if snow_last_date:
+        search_start = snow_last_date
+        if verbose:
+            print(f"Snow cache: {len(snow_timeseries)} scenes, "
+                  f"last={snow_last_date}. Fetching updates ...", flush=True)
+    else:
+        search_start = f"{start_year}-01-01"
+        if verbose:
+            print(f"Snow: no cache, full download from {search_start} ...",
+                  flush=True)
+
+    # ------------------------------------------------------------------ #
+    # Catalogo Planetary Computer
+    # ------------------------------------------------------------------ #
+    if verbose:
+        print("Connecting to Planetary Computer (snow) ...", flush=True)
+    catalog = pystac_client.Client.open(
+        PC_STAC_URL,
+        modifier=planetary_computer.sign_inplace,
+    )
+
+    bbox_snow = [lon - 0.015, lat - 0.015, lon + 0.015, lat + 0.015]
+
+    search_snow = catalog.search(
+        collections = ["modis-10A1-061"],
+        bbox        = bbox_snow,
+        datetime    = f"{search_start}/{date_end}",
+        max_items   = 5000,
+    )
+    items_snow = list(search_snow.items())
+    if snow_last_date:
+        items_snow = [it for it in items_snow
+                      if (it.properties.get("datetime", "") or
+                          it.properties.get("start_datetime", ""))
+                         > snow_last_date]
+
+    if verbose:
+        print(f"  {len(items_snow)} new snow scenes to download", flush=True)
+
+    # ------------------------------------------------------------------ #
+    # Download parallelo
+    # ------------------------------------------------------------------ #
+    lock           = threading.Lock()
+    new_scenes     = []
+    done           = [0]
+    n_items        = len(items_snow)
+
+    def _proc_snow(item):
+        import planetary_computer as _pc
+        dt_str = (item.properties.get("datetime")
+                  or item.properties.get("start_datetime"))
+        if not dt_str:
+            return None
+        try:
+            dt_obj = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            return None
+        signed   = _pc.sign(item)
+        snow_map = _read_modis_snow_scene(signed, lat, lon, n_pixels)
+        if snow_map is None:
+            return None
+        cover_mean = float(np.nanmean(snow_map))
+        if np.isnan(cover_mean):
+            return None
+        return dt_obj, cover_mean
+
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as pool:
+        futures = {pool.submit(_proc_snow, it): it for it in items_snow}
+        for fut in as_completed(futures):
+            res = fut.result()
+            done[0] += 1
+            if verbose and done[0] % 200 == 0:
+                print(f"  Snow: {done[0]}/{n_items} processed", flush=True)
+            if res is None:
+                continue
+            dt_obj, cover_mean = res
+            date_str = dt_obj.date().isoformat()
+            with lock:
+                new_scenes.append({
+                    "date"           : date_str,
+                    "year"           : dt_obj.year,
+                    "month"          : dt_obj.month,
+                    "snow_cover_pct" : cover_mean,
+                })
+
+    # ------------------------------------------------------------------ #
+    # Merge e salva cache
+    # ------------------------------------------------------------------ #
+    snow_timeseries = snow_timeseries + new_scenes
+    snow_timeseries.sort(key=lambda x: x["date"])
+    new_last = (snow_timeseries[-1]["date"]
+                if snow_timeseries else snow_last_date)
+    if new_scenes:
+        _save_snow_cache(cache_dir, lat, lon, start_year,
+                         snow_timeseries, new_last)
+        if verbose:
+            print(f"  Snow cache updated: {len(snow_timeseries)} total scenes",
+                  flush=True)
+
+    # ------------------------------------------------------------------ #
+    # Aggregazione mensile
+    # ------------------------------------------------------------------ #
+    by_month = {m: [] for m in range(1, 13)}
+    for row in snow_timeseries:
+        v = row.get("snow_cover_pct")
+        if v is not None and not np.isnan(float(v)):
+            by_month[row["month"]].append(float(v))
+
+    snow_cover_monthly_pct = np.array(
+        [np.nanmean(by_month[m]) if by_month[m] else np.nan
+         for m in range(1, 13)])
+    snow_cover_monthly_std = np.array(
+        [np.nanstd(by_month[m]) if len(by_month[m]) > 1 else 0.0
+         for m in range(1, 13)])
+
+    # Giorni medi al mese con snow_cover > 50%
+    by_month_days = {m: [] for m in range(1, 13)}
+    for row in snow_timeseries:
+        v = row.get("snow_cover_pct")
+        if v is not None:
+            # Raggruppa per anno+mese e conta giorni con > 50%
+            key = (row["year"], row["month"])
+            by_month_days[row["month"]].append(float(v) > 50.0)
+
+    # Media giorni di neve per mese
+    by_month_ndays = {m: [] for m in range(1, 13)}
+    for row in snow_timeseries:
+        v = row.get("snow_cover_pct")
+        if v is not None:
+            by_month_ndays[row["month"]].append(float(v) > 50.0)
+
+    # Per ogni mese: aggrega per anno poi media tra anni
+    from collections import defaultdict
+    per_year_month = defaultdict(list)
+    for row in snow_timeseries:
+        v = row.get("snow_cover_pct")
+        if v is not None:
+            per_year_month[(row["year"], row["month"])].append(float(v) > 50.0)
+
+    snow_days_per_year_month = {}
+    for (yr, mo), flags in per_year_month.items():
+        snow_days_per_year_month[(yr, mo)] = sum(flags)
+
+    monthly_snow_days = np.zeros(12)
+    for m in range(1, 13):
+        days_list = [v for (yr, mo), v in snow_days_per_year_month.items()
+                     if mo == m]
+        monthly_snow_days[m - 1] = float(np.mean(days_list)) if days_list else 0.0
+
+    months_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    return dict(
+        snow_cover_monthly_pct = snow_cover_monthly_pct,
+        snow_cover_monthly_std = snow_cover_monthly_std,
+        snow_days_monthly      = monthly_snow_days,
+        snow_cover_annual_pct  = float(np.nanmean(snow_cover_monthly_pct)),
+        snow_days_annual       = float(np.sum(monthly_snow_days)),
+        snow_months            = [months_names[i] for i in range(12)
+                                  if monthly_snow_days[i] > 15],
+        n_scenes_total         = len(snow_timeseries),
+        months                 = months_names,
+    )
+
+
+def report_snow_cover(snow):
+    """Stampa tabellare della copertura nevosa stagionale."""
+    M = snow["months"]
+    w = 72
+    L = [
+        "=" * w,
+        "SNOW COVER — MODIS MOD10A1.061 (Terra 500m Daily)",
+        "=" * w,
+        f"  Total scenes     : {snow['n_scenes_total']}",
+        f"  Annual snow cover: {snow['snow_cover_annual_pct']:.1f} %",
+        f"  Snow days/year   : {snow['snow_days_annual']:.0f} d/yr  "
+        f"(days with snow_cover > 50%)",
+    ]
+    if snow['snow_months']:
+        L.append(f"  Snowy months     : {', '.join(snow['snow_months'])}"
+                 f"  (>15 snow-days/month)")
+    else:
+        L.append("  Snowy months     : none  (<15 snow-days per month)")
+    L.append("")
+    hdr = "  " + " " * 10 + "  ".join(f"{m:>5}" for m in M)
+    L.append(hdr)
+    L.append("  " + "-" * (w - 2))
+    mn = snow["snow_cover_monthly_pct"]
+    sd = snow["snow_cover_monthly_std"]
+    nd = snow["snow_days_monthly"]
+    mn_s = "  ".join(f"{v:5.1f}" if not np.isnan(v) else "  N/A" for v in mn)
+    sd_s = "  ".join(f"{v:5.1f}" if not np.isnan(v) else "  N/A" for v in sd)
+    nd_s = "  ".join(f"{v:5.1f}" for v in nd)
+    L.append(f"  {'Cover [%]':<10} {mn_s}")
+    L.append(f"  {'Std [%]':<10} {sd_s}")
+    L.append(f"  {'Days>50%':<10} {nd_s}")
+    L.append("=" * w)
+    return "\n".join(L)
 
 
 def report_vegetation(res):

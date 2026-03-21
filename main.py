@@ -79,13 +79,16 @@ from matplotlib.gridspec import GridSpec
 import requests, os, json, hashlib, time, math
 import multiprocessing as mp
 from kappa_topo_3d import compute_kappa_topo_3d, report_kappa_3d
-from site_fluxes        import compute_site_fluxes, report_site_fluxes
-from site_climate       import get_site_climate, report_site_climate
+from site_fluxes        import (compute_site_fluxes, report_site_fluxes,
+                                compute_desilets_curve, report_desilets_curve)
+from site_climate       import (get_site_climate, report_site_climate,
+                                compute_power_budget, report_power_budget)
 from terrain_indices    import (compute_twi, report_twi,
                                 compute_thermal_index, report_thermal_index)
 from get_soil_properties import get_soil_properties, report_soil_properties
 from water               import compute_water_eta, report_water_eta
-from vegetation_indices  import get_vegetation_indices, report_vegetation
+from vegetation_indices  import (get_vegetation_indices, report_vegetation,
+                                 get_snow_cover, report_snow_cover)
 from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
                    plot_climate, plot_soil, plot_thermal, plot_twi,
                    plot_kappa_budget, plot_water)
@@ -564,10 +567,24 @@ def main():
         cache_dir=_OUT)
     print(report_site_climate(site_climate))
 
+    # 7b — Power budget (pannello solare + batteria)
+    power_budget = compute_power_budget(site_climate['energy_monthly_kWh'])
+    print(report_power_budget(power_budget))
+
     # 8 — Soil properties (SoilGrids)
     print("\n[8] Fetching soil properties (SoilGrids) ...")
     soil = get_soil_properties(LAT, LON, z86_cm=z86, cache_dir=_OUT)
     print(report_soil_properties(soil))
+
+    # 8b — Desilets curve N(theta_v) using theta_wp/theta_fc from pedotransfer
+    theta_wp_sr = soil.get('theta_wp', 0.05)
+    theta_fc_sr = soil.get('theta_fc', 0.35)
+    desilets_curve = compute_desilets_curve(
+        site_fluxes['N0_theoretical'],
+        theta_wp = theta_wp_sr if not np.isnan(theta_wp_sr) else 0.05,
+        theta_fc = theta_fc_sr if not np.isnan(theta_fc_sr) else 0.35,
+    )
+    print(report_desilets_curve(desilets_curve))
 
     # 9 — JRC Surface Water (eta correction)
     print("\n[9] Fetching JRC surface water occurrence (eta) ...")
@@ -608,6 +625,11 @@ def main():
         cache_dir=_OUT)
     print(report_vegetation(veg))
 
+    # 13 — Snow cover (MODIS MOD10A1)
+    print("\n[13] Fetching snow cover (MODIS MOD10A1) ...")
+    snow = get_snow_cover(LAT, LON, cache_dir=_OUT)
+    print(report_snow_cover(snow))
+
     # 14 — Neutron FOV per-azimuth
     print("\n[14] Computing neutron per-azimuth r_eff ...")
     az_neutron, overlap_az, deficit_az = compute_neutron_fov(
@@ -645,6 +667,9 @@ def main():
         twi=twi,
         thermal=thermal,
         veg=veg,
+        snow=snow,
+        power_budget=power_budget,
+        desilets_curve=desilets_curve,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(

@@ -228,6 +228,83 @@ def _lattice_water(clay_pct):
     return float(0.097 * (clay_pct / 100.0) + 0.033)
 
 
+def _saxton_rawls_2006(sand_pct, clay_pct, soc_g_kg, cfvo_pct=0.0):
+    """
+    Pedotransfer functions di Saxton & Rawls (2006) per stimare i parametri
+    idrologici del suolo da tessitura e carbonio organico.
+
+    Stima θ_WP (punto di appassimento, -1500 kPa),
+         θ_FC  (capacità di campo, -33 kPa),
+         θ_sat (saturazione, ~0 kPa).
+
+    La correzione per scheletro (cfvo) riduce proporzionalmente le capacità:
+        θ_x_bulk = θ_x_fine * (1 - cfvo_pct/100)
+
+    Parameters
+    ----------
+    sand_pct  : sabbia [%], valore tipico 5–90
+    clay_pct  : argilla [%], valore tipico 5–60
+    soc_g_kg  : carbonio organico [g/kg] (da SoilGrids, media pesata CRNS)
+    cfvo_pct  : scheletro [%] (coarse fragments volume, da SoilGrids)
+
+    Returns
+    -------
+    dict con:
+        theta_wp    [m³/m³]  punto di appassimento
+        theta_fc    [m³/m³]  capacità di campo
+        theta_sat   [m³/m³]  saturazione
+        delta_theta [m³/m³]  = theta_fc - theta_wp  (range SM utile)
+        om_pct      [%]      materia organica (SOC * 1.724)
+
+    Reference
+    ---------
+    Saxton, K.E., Rawls, W.J. (2006). Soil Water Characteristic Estimates
+    by Texture and Organic Matter for Hydrologic Solutions.
+    Soil Sci. Soc. Am. J., 70, 1569–1578.
+    """
+    if any(np.isnan(v) for v in [sand_pct, clay_pct, soc_g_kg]):
+        return dict(theta_wp=np.nan, theta_fc=np.nan, theta_sat=np.nan,
+                    delta_theta=np.nan, om_pct=np.nan)
+
+    S  = np.clip(sand_pct, 1.0, 98.0) / 100.0   # fraction
+    C  = np.clip(clay_pct, 1.0, 60.0) / 100.0   # fraction
+    OM = float(np.clip(soc_g_kg, 0.0, 150.0) / 10.0 * 1.724)  # % OM
+
+    # --- Wilting point (1500 kPa) ---
+    t1500t = (0.031 - 0.024*S + 0.487*C + 0.006*OM
+              + 0.005*S*OM - 0.013*C*OM + 0.068*S*C)
+    theta_wp = t1500t + (0.14 * t1500t - 0.02)
+
+    # --- Field capacity (33 kPa) ---
+    t33t   = (0.299 - 0.251*S + 0.195*C + 0.011*OM
+              + 0.006*S*OM - 0.027*C*OM + 0.452*S*C)
+    theta_fc = t33t + (1.283 * t33t**2 - 0.374 * t33t - 0.015)
+
+    # --- Saturation ---
+    tst      = (0.278*S + 0.034*C + 0.022*OM
+                - 0.018*S*OM - 0.027*C*OM - 0.584*S*C + 0.078)
+    theta_sat = tst + (0.636*tst - 0.107)
+
+    # Clamp values a range fisicamente plausibili
+    theta_wp  = float(np.clip(theta_wp,  0.01, 0.40))
+    theta_fc  = float(np.clip(theta_fc,  theta_wp + 0.01, 0.55))
+    theta_sat = float(np.clip(theta_sat, theta_fc + 0.01, 0.65))
+
+    # Correzione per scheletro (coarse fragments)
+    fine_frac = 1.0 - float(np.clip(cfvo_pct, 0.0, 70.0)) / 100.0
+    theta_wp  *= fine_frac
+    theta_fc  *= fine_frac
+    theta_sat *= fine_frac
+
+    return dict(
+        theta_wp    = theta_wp,
+        theta_fc    = theta_fc,
+        theta_sat   = theta_sat,
+        delta_theta = theta_fc - theta_wp,
+        om_pct      = OM,
+    )
+
+
 def _parse_soilgrids_tiff(content):
     """
     Estrae il valore dal pixel centrale di un GeoTIFF SoilGrids WCS.
@@ -499,6 +576,24 @@ def get_soil_properties(
     result['lattice_water_gg'] = lw
 
     # ------------------------------------------------------------------ #
+    # 6b. Saxton & Rawls (2006) pedotransfer: θ_WP, θ_FC, θ_sat
+    # ------------------------------------------------------------------ #
+    soc_crns  = result.get('soc_crns', np.nan)
+    cfvo_crns = result.get('cfvo_crns', np.nan)
+    cfvo_for_sr = cfvo_crns if not np.isnan(cfvo_crns) else 0.0
+    sr = _saxton_rawls_2006(
+        sand_pct  = result.get('sand_crns', np.nan),
+        clay_pct  = clay_crns,
+        soc_g_kg  = soc_crns,
+        cfvo_pct  = cfvo_for_sr,
+    )
+    result['theta_wp']     = sr['theta_wp']
+    result['theta_fc']     = sr['theta_fc']
+    result['theta_sat']    = sr['theta_sat']
+    result['delta_theta']  = sr['delta_theta']
+    result['om_pct']       = sr['om_pct']
+
+    # ------------------------------------------------------------------ #
     # 7. Classificazione tessitura USDA
     # ------------------------------------------------------------------ #
     sand_m = result.get('sand_crns', np.nan)
@@ -618,6 +713,18 @@ def report_soil_properties(res):
 
     L.append("")
     L.append("  Uncertainty = propagated std on CRNS-weighted mean")
+
+    # Saxton & Rawls pedotransfer
+    if not np.isnan(res.get('theta_fc', np.nan)):
+        L.append("")
+        L.append("  Saxton & Rawls (2006) pedotransfer — SM thresholds:")
+        L.append(f"    OM          : {res['om_pct']:.2f} %  (SOC × 1.724)")
+        L.append(f"    θ_WP        : {res['theta_wp']:.3f} m³/m³  (wilting point, -1500 kPa)")
+        L.append(f"    θ_FC        : {res['theta_fc']:.3f} m³/m³  (field capacity, -33 kPa)")
+        L.append(f"    θ_sat       : {res['theta_sat']:.3f} m³/m³  (saturation)")
+        L.append(f"    Δθ usabile  : {res['delta_theta']:.3f} m³/m³  (θ_FC - θ_WP)")
+        L.append(f"    (coarse frag. {res.get('cfvo_crns', float('nan')):.1f}% già inclusi)")
+
     L.append("=" * w)
     return "\n".join(L)
 

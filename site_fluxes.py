@@ -225,6 +225,108 @@ def compute_site_fluxes(
     )
 
 
+def compute_desilets_curve(N0_theoretical, theta_wp=0.05, theta_fc=0.35,
+                           n_points=12):
+    """
+    Curva di Desilets N(θ_v) sull'intervallo [θ_WP, θ_FC] del sito.
+
+    Permette di stimare:
+      - il range di conteggio atteso al sito (N_at_wp, N_at_fc)
+      - la sensibilità ∂N/∂θ_v in cph per unità di SM
+      - il range dinamico ΔN = N_at_wp − N_at_fc
+
+    Tutte le quantità dipendono da N0 teorico (fornito da compute_site_fluxes)
+    e dai limiti di SM stimati dalle pedofunzioni Saxton & Rawls.
+
+    Formula Desilets et al. 2010:
+        N(θ_v) = N0 * (a0 + a1 / (θ_v + a2))
+        ∂N/∂θ_v = −N0 * a1 / (θ_v + a2)²
+
+    Parameters
+    ----------
+    N0_theoretical : float — N0 teorico [cph] da compute_site_fluxes
+    theta_wp       : float — punto di appassimento [m³/m³] da Saxton & Rawls
+    theta_fc       : float — capacità di campo [m³/m³] da Saxton & Rawls
+    n_points       : int   — punti della curva (default 12)
+
+    Returns
+    -------
+    dict con:
+        theta_v     array (n,)  range SM utilizzato per la curva [m³/m³]
+        N_counts    array (n,)  conteggi attesi [cph]
+        dN_dtheta   array (n,)  sensibilità ∂N/∂θ_v [cph / (m³/m³)]
+        N_at_wp     float       N a θ_WP (massimo counts, suolo secco)
+        N_at_fc     float       N a θ_FC (minimo counts, suolo saturo utile)
+        dN_at_wp    float       sensibilità a θ_WP [cph / (m³/m³)]
+        dN_at_fc    float       sensibilità a θ_FC [cph / (m³/m³)]
+        delta_N     float       ΔN = N_at_wp − N_at_fc  (range dinamico utile)
+        theta_wp    float       input θ_WP
+        theta_fc    float       input θ_FC
+        N0_theoretical float    input N0
+    """
+    wp = max(0.01, float(theta_wp))
+    fc = min(0.60, float(theta_fc))
+    if fc <= wp:
+        fc = wp + 0.10
+
+    theta_v = np.linspace(wp, fc, n_points)
+
+    N_counts  = N0_theoretical * (DESILETS_A0
+                                  + DESILETS_A1 / (theta_v + DESILETS_A2))
+    dN_dtheta = -N0_theoretical * DESILETS_A1 / (theta_v + DESILETS_A2)**2
+
+    def _N(th):
+        return N0_theoretical * (DESILETS_A0
+                                 + DESILETS_A1 / (th + DESILETS_A2))
+
+    def _dN(th):
+        return -N0_theoretical * DESILETS_A1 / (th + DESILETS_A2)**2
+
+    return dict(
+        theta_v        = theta_v,
+        N_counts       = N_counts,
+        dN_dtheta      = dN_dtheta,
+        N_at_wp        = float(_N(wp)),
+        N_at_fc        = float(_N(fc)),
+        dN_at_wp       = float(_dN(wp)),
+        dN_at_fc       = float(_dN(fc)),
+        delta_N        = float(_N(wp) - _N(fc)),
+        theta_wp       = wp,
+        theta_fc       = fc,
+        N0_theoretical = float(N0_theoretical),
+    )
+
+
+def report_desilets_curve(dc):
+    """Stampa tabellare della curva di Desilets N(θ_v)."""
+    w = 72
+    L = [
+        "=" * w,
+        "DESILETS CURVE — Expected N counts vs Soil Moisture",
+        "=" * w,
+        f"  N0 theoretical  : {dc['N0_theoretical']:.0f} cph",
+        f"  θ_WP (wilting)  : {dc['theta_wp']:.3f} m³/m³",
+        f"  θ_FC (field cap): {dc['theta_fc']:.3f} m³/m³",
+        "",
+        f"  N at θ_WP (dry) : {dc['N_at_wp']:.0f} cph   (max expected counts)",
+        f"  N at θ_FC (wet) : {dc['N_at_fc']:.0f} cph   (min expected counts)",
+        f"  ΔN dynamic range: {dc['delta_N']:.0f} cph",
+        "",
+        f"  Sensitivity ∂N/∂θ_v:",
+        f"    at θ_WP : {dc['dN_at_wp']:.0f} cph / (m³/m³)  "
+        f"= {dc['dN_at_wp']/100:.1f} cph / 1% SM",
+        f"    at θ_FC : {dc['dN_at_fc']:.0f} cph / (m³/m³)  "
+        f"= {dc['dN_at_fc']/100:.1f} cph / 1% SM",
+        "",
+        "  θ_v [m³/m³]    N [cph]   ∂N/∂θ [cph/(m³/m³)]",
+        "  " + "-" * 48,
+    ]
+    for th, nc, dn in zip(dc['theta_v'], dc['N_counts'], dc['dN_dtheta']):
+        L.append(f"  {th:.3f}         {nc:7.0f}      {dn:8.0f}")
+    L.append("=" * w)
+    return "\n".join(L)
+
+
 def report_site_fluxes(res):
     """Stampa leggibile dei risultati di compute_site_fluxes."""
     w = 72

@@ -605,6 +605,148 @@ def get_site_climate(
 
 
 # ---------------------------------------------------------------------------
+# Power budget — dimensionamento pannello + batteria per datalogger CRNS
+# ---------------------------------------------------------------------------
+
+#: Consumo tipico CRNS datalogger [W] (sensore + logger + modem GSM medio)
+CRNS_POWER_W_DEFAULT = 10.0
+
+#: Giorni di autonomia senza sole (batteria)
+STORAGE_DAYS_DEFAULT = 3
+
+#: Fattore di sicurezza (perdite cavi, invecchiamento pannello, angolo sub-ottimale)
+SAFETY_FACTOR_DEFAULT = 1.30
+
+#: Giorni per mese (anno non bisestile)
+_DAYS_PER_MONTH = np.array([31,28,31,30,31,30,31,31,30,31,30,31], dtype=float)
+
+
+def compute_power_budget(
+    energy_monthly_kWh,
+    datalogger_power_W = CRNS_POWER_W_DEFAULT,
+    storage_days       = STORAGE_DAYS_DEFAULT,
+    safety_factor      = SAFETY_FACTOR_DEFAULT,
+):
+    """
+    Dimensionamento energetico per un datalogger CRNS alimentato a pannello solare.
+
+    Il calcolo è basato sull'energia mensile prodotta da 1 m² di pannello
+    (già corretta per temperatura e orizzonte locale — da PVGIS via get_site_climate).
+
+    Metodo
+    ------
+    1. Consumo giornaliero [Wh] = datalogger_power_W × 24
+    2. Consumo mensile [kWh] = consumo_giornaliero × giorni_del_mese / 1000
+    3. Mese peggiore = mese con meno energia prodotta (tipicamente dicembre)
+    4. Area pannello necessaria [m²]:
+           area = (consumo_mese_peggiore [kWh] × safety_factor) /
+                   energia_mese_peggiore [kWh/m²]
+    5. Batteria [Wh] = consumo_giornaliero × storage_days
+
+    Parameters
+    ----------
+    energy_monthly_kWh  : array (12,) energia prodotta da 1 m² di pannello [kWh/mese]
+                          (da get_site_climate → 'energy_monthly_kWh')
+    datalogger_power_W  : consumo medio del datalogger [W]
+                          default 10 W (sensore CRNS + logger + modem GSM)
+    storage_days        : giorni di autonomia con batteria (senza sole) [d]
+                          default 3
+    safety_factor       : fattore di sovradimensionamento (perdite, invecchiamento)
+                          default 1.30
+
+    Returns
+    -------
+    dict con:
+        consumption_Wh_day          float  consumo giornaliero [Wh]
+        consumption_monthly_kWh     array  consumo mensile [kWh]  (12,)
+        balance_monthly_kWh_m2      array  surplus/deficit per 1 m² [kWh/mese] (12,)
+        worst_month_idx             int    indice mese peggiore (0=gen)
+        worst_month_name            str    nome mese peggiore
+        worst_month_energy_kWh_m2   float  energia peggio mese [kWh/m²]
+        recommended_panel_m2        float  area pannello raccomandata [m²]
+        recommended_panel_Wp        float  potenza picco raccomandata [W]
+                                           (assumendo 200 Wp/m²)
+        battery_Wh                  float  capacità batteria raccomandata [Wh]
+        battery_Ah_12V              float  equivalente in Ah a 12V
+        datalogger_power_W          float  consumo usato
+        storage_days                int    giorni autonomia usati
+        safety_factor               float  fattore sicurezza usato
+    """
+    energy = np.asarray(energy_monthly_kWh, dtype=float)
+
+    consumption_Wh_day      = datalogger_power_W * 24.0
+    consumption_monthly_kWh = consumption_Wh_day * _DAYS_PER_MONTH / 1000.0
+
+    balance = energy - consumption_monthly_kWh   # + = surplus, − = deficit
+
+    worst_idx  = int(np.argmin(energy))
+    worst_name = MONTHS[worst_idx]
+    worst_en   = float(energy[worst_idx])
+
+    worst_consumption_kWh = float(consumption_monthly_kWh[worst_idx])
+    energy_needed_kWh     = worst_consumption_kWh * safety_factor
+
+    if worst_en > 0:
+        panel_m2 = energy_needed_kWh / worst_en
+    else:
+        panel_m2 = float('nan')
+
+    panel_Wp  = panel_m2 * 200.0   # 200 Wp/m² pannello policristallino tipico
+    battery_Wh = consumption_Wh_day * storage_days
+    battery_Ah = battery_Wh / 12.0   # a 12V
+
+    return dict(
+        consumption_Wh_day        = consumption_Wh_day,
+        consumption_monthly_kWh   = consumption_monthly_kWh,
+        balance_monthly_kWh_m2    = balance,
+        worst_month_idx           = worst_idx,
+        worst_month_name          = worst_name,
+        worst_month_energy_kWh_m2 = worst_en,
+        recommended_panel_m2      = panel_m2,
+        recommended_panel_Wp      = panel_Wp,
+        battery_Wh                = battery_Wh,
+        battery_Ah_12V            = battery_Ah,
+        datalogger_power_W        = datalogger_power_W,
+        storage_days              = storage_days,
+        safety_factor             = safety_factor,
+    )
+
+
+def report_power_budget(pb, months=MONTHS):
+    """Stampa leggibile del power budget."""
+    w = 72
+    L = [
+        "=" * w,
+        "POWER BUDGET — Solar Panel & Battery Sizing for CRNS Datalogger",
+        "=" * w,
+        f"  Datalogger power    : {pb['datalogger_power_W']:.1f} W",
+        f"  Daily consumption   : {pb['consumption_Wh_day']:.0f} Wh/day",
+        f"  Battery autonomy    : {pb['storage_days']} days",
+        f"  Safety factor       : {pb['safety_factor']:.2f}",
+        "",
+        f"  Worst month         : {pb['worst_month_name']}",
+        f"  Solar energy (worst): {pb['worst_month_energy_kWh_m2']:.2f} kWh/m²",
+        "",
+        f"  *** Recommended panel : {pb['recommended_panel_m2']:.2f} m²"
+        f"  (~{pb['recommended_panel_Wp']:.0f} Wp) ***",
+        f"  *** Recommended batt. : {pb['battery_Wh']:.0f} Wh"
+        f"  ({pb['battery_Ah_12V']:.0f} Ah @ 12V) ***",
+        "",
+    ]
+    hdr = "  " + " " * 10 + "  ".join(f"{m:>5}" for m in months)
+    L.append(hdr)
+    L.append("  " + "-" * (w - 2))
+    mc = pb['consumption_monthly_kWh']
+    mb = pb['balance_monthly_kWh_m2']
+    mc_s = "  ".join(f"{v:5.2f}" for v in mc)
+    mb_s = "  ".join(f"{v:+5.2f}" for v in mb)
+    L.append(f"  {'Consum [kWh]':<10} {mc_s}")
+    L.append(f"  {'Balance/m² ':<10} {mb_s}  (+ surplus)")
+    L.append("=" * w)
+    return "\n".join(L)
+
+
+# ---------------------------------------------------------------------------
 # Report leggibile
 # ---------------------------------------------------------------------------
 
