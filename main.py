@@ -85,9 +85,11 @@ from terrain_indices    import (compute_twi, report_twi,
                                 compute_thermal_index, report_thermal_index)
 from get_soil_properties import get_soil_properties, report_soil_properties
 from water               import compute_water_eta, report_water_eta
+from vegetation_indices  import get_vegetation_indices, report_vegetation
 from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
                    plot_climate, plot_soil, plot_thermal, plot_twi,
                    plot_kappa_budget, plot_water)
+from vegetation_plots    import plot_seasonal_cycles, plot_timeseries, plot_maps
 from reports import write_report
 
 try:
@@ -599,13 +601,20 @@ def main():
                                site_climate['T_min_monthly_C'],
                                site_climate['T_max_monthly_C']))
 
-    # 12 — Neutron FOV per-azimuth
-    print("\n[12] Computing neutron per-azimuth r_eff ...")
+    # 12 — Vegetation indices (Landsat + MODIS)
+    print("\n[12] Fetching vegetation indices (Landsat + MODIS) ...")
+    veg = get_vegetation_indices(
+        LAT, LON, dx_grid, dy_grid, dist_grid, r86,
+        cache_dir=_OUT)
+    print(report_vegetation(veg))
+
+    # 14 — Neutron FOV per-azimuth
+    print("\n[14] Computing neutron per-azimuth r_eff ...")
     az_neutron, overlap_az, deficit_az = compute_neutron_fov(
         elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86,
         AZIMUTH_STEP_DEG, DEM_RADIUS_M)
 
-    # 13 — Mean slope
+    # 15 — Mean slope
     nr, nc = elev.shape
     dpx = abs(np.nanmedian(np.diff(dx_grid[nr//2,:])))
     dpy = abs(np.nanmedian(np.diff(dy_grid[:,nc//2])))
@@ -635,6 +644,7 @@ def main():
         water=water,
         twi=twi,
         thermal=thermal,
+        veg=veg,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -645,13 +655,13 @@ def main():
         omega="n/a", tol="n/a",
     )
 
-    # 13 — Report
+    # 16 — Report
     rpt = _outpath("crns_report.txt")
-    print(f"\n[13] Writing report -> {rpt}")
+    print(f"\n[16] Writing report -> {rpt}")
     print(write_report(rpt, params, results))
 
-    # 14 — Plots
-    print("[14] Generating plots ...")
+    # 17 — Plots
+    print("[17] Generating plots ...")
     plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
               results, _outpath("crns_topo_main.png"),
               lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
@@ -677,6 +687,12 @@ def main():
                       lat=LAT, lon=LON)
     plot_water(water, dx_grid, dy_grid, dist_grid, r86,
                _outpath("crns_water.png"), lat=LAT, lon=LON)
+    plot_seasonal_cycles(veg, _outpath("crns_veg_seasonal.png"),
+                         site_name=NAME)
+    plot_timeseries(veg, _outpath("crns_veg_timeseries.png"),
+                    site_name=NAME)
+    plot_maps(veg, dx_grid, dy_grid, dist_grid, r86,
+              _outpath("crns_veg_maps.png"), site_name=NAME)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")
@@ -685,7 +701,9 @@ def main():
     for fn in ["crns_report.txt", "crns_topo_main.png",
                "crns_footprint.png", "crns_horizon.png", "crns_fov_detail.png",
                "crns_climate.png", "crns_soil.png", "crns_thermal.png",
-               "crns_twi.png", "crns_kappa_budget.png", "crns_water.png"]:
+               "crns_twi.png", "crns_kappa_budget.png", "crns_water.png",
+               "crns_veg_seasonal.png", "crns_veg_timeseries.png",
+               "crns_veg_maps.png"]:
         p = _outpath(fn)
         sz_kb = os.path.getsize(p)//1024 if os.path.exists(p) else 0
         print(f"    {fn}  ({sz_kb} kB)")
