@@ -8,10 +8,10 @@ formula di Desilets (suolo completamente secco, theta_v = 0).
 Fisica
 ------
 Muoni:
-    N_muon(H) = N_muon_sl * exp(beta_muon * (P0 - P(H)) / P0) * kappa_muon
+    N_muon(H) = N_muon_sl * exp(beta_muon * (P0 - P(H))) * kappa_muon
 
 Neutroni epitermali:
-    N_neut(H) = N_neut_sl * f_Rc * exp(beta_neut * (P0 - P(H)) / P0) * kappa_topo
+    N_neut(H) = N_neut_sl * f_Rc * exp(beta_neut * (P0 - P(H))) * kappa_topo
 
     f_Rc: fattore di correzione per rigidity cutoff rispetto al livello
     del mare a latitudine geomagnetically corrected (usando tabella
@@ -42,6 +42,26 @@ Rigidity cutoff:
 Nota: i valori N_muon_sl e N_neut_sl sono specifici del rivelatore
 (area efficace, efficienza, moderatore). I valori di default (4000 e 900
 cph) devono essere calibrati per il rivelatore Finapp.
+
+coefficienti per i muoni in funzione dell'altezza
+  [Regime basso (< 1000 m)]  n = 51
+    slope  b = (-1.0584e-06 ± 4.17e-08) hPa^-1 m^-1
+    interc a = (-1.0478e-03 ± 1.91e-05) hPa^-1
+  [Regime alto  (>= 1000 m)]  n = 7
+    slope  b = (-1.1067e-06 ± 9.43e-09) hPa^-1 m^-1
+    interc a = (-1.4842e-03 ± 2.54e-05) hPa^-1
+
+    Nota: beta_muon non è più un parametro fisso — viene calcolato
+    internamente con fit lineare a due regimi (< 1000 m, >= 1000 m):
+        beta_muon(alt) = a + b * alt_m   [hPa^-1]
+    con segno negativo perché il flusso cresce salendo (dP < 0 implica
+    che l'esponente deve essere positivo → beta è definito con segno
+    tale che exp(beta * dP) > 1 quando dP > 0).
+
+    Fit empirico da dati stazione:
+      basso (< 1000 m): a = -1.0478e-3, b = -1.0584e-6  hPa^-1 m^-1
+      alto  (>= 1000 m): a = -1.4842e-3, b = -1.1067e-6  hPa^-1 m^-1
+
 
 Author      : MB
 Affiliation :
@@ -105,8 +125,8 @@ def compute_site_fluxes(
     kappa_muon,
     N_muon_sl  = 4000.0,   # conteggio muoni al livello del mare [cph]
     N_neut_sl  = 900.0,    # conteggio neutroni al livello del mare [cph]
-    beta_muon  = 1.15,     # coefficiente barometrico muoni [-]
-    beta_neut  = 2.3,      # coefficiente barometrico neutroni [-]
+    beta_muon  = 0.005,     # coefficiente barometrico muoni [-]
+    beta_neut  = 0.0077,      # coefficiente barometrico neutroni [-]
 ):
     """
     Calcola i conteggi teorici attesi al sito e N0 teorico.
@@ -131,7 +151,7 @@ def compute_site_fluxes(
     # 1. Pressione al sito
     # ------------------------------------------------------------------ #
     P_site = _pressure(alt_m)
-    dP_rel = (P0_HPA - P_site) / P0_HPA   # > 0 in quota
+    dP_rel = (P0_HPA - P_site)   # > 0 in quota
 
     # ------------------------------------------------------------------ #
     # 2. Rigidity cutoff
@@ -139,11 +159,28 @@ def compute_site_fluxes(
     Rc = _cutoff_rigidity(lat, lon)
     f_Rc = _f_rigidity(Rc)
 
+
+    # ------------------------------------------------------------------ #
+    # 2. Beta muoni — fit lineare a due regimi
+    #    beta(alt) = a + b * alt_m  [hPa^-1]
+    #    Il fit restituisce valori negativi; per avere
+    #    exp(beta_muon * dP) > 1 con dP > 0 usiamo il valore assoluto.
+    # ------------------------------------------------------------------ #
+    if alt_m < 1000.0:
+        a_muon = -1.0478e-3   # hPa^-1
+        b_muon = -1.0584e-6   # hPa^-1 m^-1
+    else:
+        a_muon = -1.4842e-3   # hPa^-1
+        b_muon = -1.1067e-6   # hPa^-1 m^-1
+
+    beta_muon = abs(a_muon + b_muon * alt_m)   # hPa^-1, sempre > 0
+
     # ------------------------------------------------------------------ #
     # 3. Fattori di quota
     # ------------------------------------------------------------------ #
     alt_factor_muon = float(np.exp( beta_muon * dP_rel))
     alt_factor_neut = float(np.exp( beta_neut * dP_rel))
+
 
     # ------------------------------------------------------------------ #
     # 4. Conteggi attesi al sito

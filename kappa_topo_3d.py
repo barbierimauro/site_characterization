@@ -174,6 +174,8 @@ def compute_kappa_topo_3d(
     kappa_vuoto = -float(np.sum(np.where(vuoto_mask, dN_obs, 0.0))) / N_ref
     kappa_check = kappa_pieno + kappa_sopra + kappa_vuoto
 
+    kappa_topo = kappa_check
+    
     # ------------------------------------------------------------------ #
     # Mappa 2-D dei pesi per il plotting
     # ------------------------------------------------------------------ #
