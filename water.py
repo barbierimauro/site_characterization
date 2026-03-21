@@ -191,6 +191,14 @@ def _download_jrc_crop(lat, lon, radius_m):
         # Calcola coordinate centro pixel per la finestra letta
         win_tf = src.window_transform(window)
 
+    # Finestra vuota: tile non copre l'area richiesta -> nessuna acqua
+    if data.size == 0:
+        print(f"   JRC: empty window (tile {tile_name} does not cover area) "
+              f"-> assuming no surface water", flush=True)
+        lons_crop = np.array([lon])
+        lats_crop = np.array([lat])
+        return np.zeros((1, 1), dtype=np.uint8), lons_crop, lats_crop, tile_name
+
     nr, nc = data.shape
 
     # Coordinate centro pixel
