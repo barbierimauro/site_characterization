@@ -82,9 +82,10 @@ from site_climate       import get_site_climate, report_site_climate
 from terrain_indices    import (compute_twi, report_twi,
                                 compute_thermal_index, report_thermal_index)
 from get_soil_properties import get_soil_properties, report_soil_properties
+from water               import compute_water_eta, report_water_eta
 from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
                    plot_climate, plot_soil, plot_thermal, plot_twi,
-                   plot_kappa_budget)
+                   plot_kappa_budget, plot_water)
 from reports import write_report
 
 try:
@@ -564,13 +565,20 @@ def main():
     soil = get_soil_properties(LAT, LON, z86_cm=z86, cache_dir=_OUT)
     print(report_soil_properties(soil))
 
-    # 9 — Topographic Wetness Index
-    print("\n[9] Computing TWI ...")
+    # 9 — JRC Surface Water (eta correction)
+    print("\n[9] Fetching JRC surface water occurrence (eta) ...")
+    water = compute_water_eta(
+        LAT, LON, dx_grid, dy_grid, dist_grid, r86,
+        cache_dir=_OUT)
+    print(report_water_eta(water))
+
+    # 10 — Topographic Wetness Index
+    print("\n[10] Computing TWI ...")
     twi = compute_twi(elev, dx_grid, dy_grid, dist_grid, r86, n_cores=N_CORES)
     print(report_twi(twi))
 
-    # 10 — Thermal index
-    print("\n[10] Computing thermal index ...")
+    # 11 — Thermal index
+    print("\n[11] Computing thermal index ...")
     # era5_elevation_m non è ancora esposto da get_site_climate:
     # si usa s_elev come fallback (delta_elevation = 0, nessuna correzione lapse)
     era5_elev = site_climate.get('era5_elevation_m', s_elev)
@@ -589,13 +597,13 @@ def main():
                                site_climate['T_min_monthly_C'],
                                site_climate['T_max_monthly_C']))
 
-    # 11 — Neutron FOV per-azimuth
-    print("\n[8] Computing neutron per-azimuth r_eff ...")
+    # 12 — Neutron FOV per-azimuth
+    print("\n[12] Computing neutron per-azimuth r_eff ...")
     az_neutron, overlap_az, deficit_az = compute_neutron_fov(
         elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86,
         AZIMUTH_STEP_DEG, DEM_RADIUS_M)
 
-    # 12 — Mean slope
+    # 13 — Mean slope
     nr, nc = elev.shape
     dpx = abs(np.nanmedian(np.diff(dx_grid[nr//2,:])))
     dpy = abs(np.nanmedian(np.diff(dy_grid[:,nc//2])))
@@ -622,6 +630,7 @@ def main():
         site_fluxes=site_fluxes,
         site_climate=site_climate,
         soil=soil,
+        water=water,
         twi=twi,
         thermal=thermal,
         history=[],   # no iteration history with cell-summation method
@@ -664,6 +673,8 @@ def main():
              _outpath("crns_twi.png"), lat=LAT, lon=LON)
     plot_kappa_budget(results, _outpath("crns_kappa_budget.png"),
                       lat=LAT, lon=LON)
+    plot_water(water, dx_grid, dy_grid, dist_grid, r86,
+               _outpath("crns_water.png"), lat=LAT, lon=LON)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")
@@ -672,7 +683,7 @@ def main():
     for fn in ["crns_report.txt", "crns_topo_main.png",
                "crns_footprint.png", "crns_horizon.png", "crns_fov_detail.png",
                "crns_climate.png", "crns_soil.png", "crns_thermal.png",
-               "crns_twi.png", "crns_kappa_budget.png"]:
+               "crns_twi.png", "crns_kappa_budget.png", "crns_water.png"]:
         p = _outpath(fn)
         sz_kb = os.path.getsize(p)//1024 if os.path.exists(p) else 0
         print(f"    {fn}  ({sz_kb} kB)")
