@@ -95,6 +95,10 @@ from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
 from vegetation_plots    import plot_seasonal_cycles, plot_timeseries, plot_maps
 from lulc import get_lulc, report_lulc, plot_lulc_worldcover, plot_lulc_osm
 from reports import write_report
+from crns_corrections import get_crns_corrections, report_crns_corrections
+from geology import get_geology, report_geology
+from sampling_plan import (compute_sampling_plan, report_sampling_plan,
+                            plot_sampling_plan)
 
 try:
     import rasterio
@@ -146,9 +150,19 @@ def r86_kohli(theta_v, pressure_hpa):
     """Footprint radius (86% sensitivity, m) — Kohli 2015."""
     return KOHLI_A1 / (theta_v + KOHLI_A2) * (P0_HPA / pressure_hpa)
 
-def z86_desilets(theta_v, rho_b):
-    """Penetration depth (86% sensitivity, cm) — Kohli/Bogena."""
-    return DESILETS_NUM / (rho_b * (DESILETS_ALPHA + theta_v))
+def z86_desilets(theta_v, rho_b, lw=0.0):
+    """
+    Penetration depth (86% sensitivity, cm).
+
+    Formula Köhli/Bogena con correzione lattice water (lw):
+        z86 = 8.3 / (rho_b * (0.0564 + theta_v + lw))
+
+    lw [g/g] è l'acqua strutturalmente legata nei minerali argillosi
+    (Köhli 2021). Anche a suolo "secco" (theta_v_liquida=0), lw è sempre
+    presente e riduce z86 sistematicamente.
+    Con lw=0 si recupera la formula originale.
+    """
+    return DESILETS_NUM / (rho_b * (DESILETS_ALPHA + theta_v + max(0.0, lw)))
 
 def weight_radial(r, r86):
     """Radial sensitivity weight W(r) — exponential decay, Kohli 2015."""
@@ -555,8 +569,8 @@ def main():
           f"max_horizon={horizon.max():.1f}deg  "
           f"mean_horizon={horizon.mean():.1f}deg")
 
-    # 6 — Site fluxes & N0
-    print("\n[6] Computing site fluxes ...")
+    # 6 — Site fluxes & N0 (provvisori, senza lw — verrà ricalcolato dopo soil)
+    print("\n[6] Computing site fluxes (preliminary, lw=0 — updated after soil) ...")
     site_fluxes = compute_site_fluxes(LAT, LON, s_elev, kappa_topo, kappa_muon)
     print(report_site_fluxes(site_fluxes))
 
@@ -577,13 +591,33 @@ def main():
     soil = get_soil_properties(LAT, LON, z86_cm=z86, cache_dir=_OUT)
     print(report_soil_properties(soil))
 
-    # 8b — Desilets curve N(theta_v) using theta_wp/theta_fc from pedotransfer
+    # 8b — Aggiorna z86 con lattice water dal suolo reale
+    lw       = soil.get('lattice_water_gg', 0.0)
+    soc_gkg  = soil.get('soc_crns', 0.0)
+    if not np.isnan(float(lw)) and lw > 0:
+        z86_lw = z86_desilets(THETA_V_INIT, RHO_BULK, lw=lw)
+        print(f"   z86 senza lw : {z86:.2f} cm")
+        print(f"   z86 con lw   : {z86_lw:.2f} cm  (lw={lw:.4f} g/g)")
+        z86 = z86_lw
+    lw  = float(lw) if not np.isnan(float(lw)) else 0.0
+    soc = float(soc_gkg) if soc_gkg and not np.isnan(float(soc_gkg)) else 0.0
+
+    # 8c — Ricalcola site_fluxes con lw aggiornato (N0 ora a theta_v=0, lw presente)
+    site_fluxes = compute_site_fluxes(
+        LAT, LON, s_elev, kappa_topo, kappa_muon, lw=lw,
+        soc_gkg=soc, rho_b=RHO_BULK)
+    print(report_site_fluxes(site_fluxes))
+
+    # 8d — Desilets curve N(theta_v) con lw e SOC supplementare
     theta_wp_sr = soil.get('theta_wp', 0.05)
     theta_fc_sr = soil.get('theta_fc', 0.35)
+    soc_equiv   = site_fluxes.get('theta_v_soc', 0.0)
     desilets_curve = compute_desilets_curve(
         site_fluxes['N0_theoretical'],
-        theta_wp = theta_wp_sr if not np.isnan(theta_wp_sr) else 0.05,
-        theta_fc = theta_fc_sr if not np.isnan(theta_fc_sr) else 0.35,
+        theta_wp  = theta_wp_sr if not np.isnan(theta_wp_sr) else 0.05,
+        theta_fc  = theta_fc_sr if not np.isnan(theta_fc_sr) else 0.35,
+        lw        = lw,
+        soc_equiv = soc_equiv,
     )
     print(report_desilets_curve(desilets_curve))
 
@@ -594,9 +628,10 @@ def main():
         cache_dir=_OUT)
     print(report_water_eta(water))
 
-    # 10 — Topographic Wetness Index
+    # 10 — Topographic Wetness Index (con cache)
     print("\n[10] Computing TWI ...")
-    twi = compute_twi(elev, dx_grid, dy_grid, dist_grid, r86, n_cores=N_CORES)
+    twi = compute_twi(elev, dx_grid, dy_grid, dist_grid, r86,
+                      n_cores=N_CORES, cache_dir=_OUT)
     print(report_twi(twi))
 
     # 11 — Thermal index
@@ -639,6 +674,7 @@ def main():
         r86,
         cache_dir=_OUT,
         osm_radius_m=int(r86 * 1.5),
+        theta_v_init=THETA_V_INIT,
         verbose=True)
     print(report_lulc(lulc_res))
 
@@ -648,7 +684,7 @@ def main():
         elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86,
         AZIMUTH_STEP_DEG, DEM_RADIUS_M)
 
-    # 15 — Mean slope
+    # 15b — Mean slope
     nr, nc = elev.shape
     dpx = abs(np.nanmedian(np.diff(dx_grid[nr//2,:])))
     dpy = abs(np.nanmedian(np.diff(dy_grid[:,nc//2])))
@@ -659,16 +695,51 @@ def main():
     fpm        = dist_grid <= r86
     mean_slope = float(np.nanmean(ag[fpm])) if np.any(fpm) else 0.0
 
-    kappa_tot     = kappa_topo * kappa_muon
+    # kappa_lulc: usa WorldCover come riferimento (più affidabile globalmente)
+    kappa_lulc    = lulc_res.get('wc_kappa', 1.0)
+    kappa_tot     = kappa_topo * kappa_muon * kappa_lulc
     theta_v_corr  = THETA_V_INIT / kappa_topo if kappa_topo > 0 else float("inf")
+
+    # 16 — Correzioni supplementari (WV, AGBH, SWE)
+    print("\n[16] Computing supplementary CRNS corrections (WV, AGBH, SWE) ...")
+    lai_mean = 0.0
+    try:
+        lai_data = veg.get('lai_monthly_mean')
+        if lai_data is not None and len(lai_data) > 0:
+            lai_mean = float(np.nanmean(lai_data))
+    except Exception:
+        pass
+    crns_corr = get_crns_corrections(
+        LAT, LON,
+        lai_annual_m2m2=lai_mean,
+        cache_dir=_OUT)
+    print(report_crns_corrections(crns_corr, z86_cm=z86))
+
+    # 17 — Geology (Macrostrat API)
+    print("\n[17] Fetching geology (Macrostrat) ...")
+    geology = get_geology(LAT, LON, cache_dir=_OUT)
+    print(report_geology(geology))
+
+    # 18 — Optimal soil sampling plan
+    print("\n[18] Computing optimal soil sampling plan ...")
+    sampling = compute_sampling_plan(
+        r86,
+        theta_v_init = THETA_V_INIT,
+        theta_wp     = soil.get('theta_wp', 0.05),
+        theta_fc     = soil.get('theta_fc', 0.35),
+        pressure_hpa = pressure,
+    )
+    print(report_sampling_plan(sampling))
 
     results = dict(
         sensor_alt=s_elev, pressure=pressure, rho_air=rho_air,
         mean_slope_rad=mean_slope,
         max_horizon=float(horizon.max()), mean_horizon=float(horizon.mean()),
         r86_sealevel=r86_sea, r86=r86, z86=z86,
+        lw=lw, soc_gkg=soc,
         V0=V0, Veff=Veff,
-        kappa_topo=kappa_topo, kappa_muon=kappa_muon, kappa_total=kappa_tot,
+        kappa_topo=kappa_topo, kappa_muon=kappa_muon,
+        kappa_lulc=kappa_lulc, kappa_total=kappa_tot,
         kappa_pieno=kappa_pieno, kappa_sopra=kappa_sopra,
         kappa_vuoto=kappa_vuoto, kappa_info=kappa_info,
         theta_v_corrected=theta_v_corr,
@@ -683,6 +754,9 @@ def main():
         lulc=lulc_res,
         power_budget=power_budget,
         desilets_curve=desilets_curve,
+        crns_corrections=crns_corr,
+        geology=geology,
+        sampling=sampling,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -693,13 +767,13 @@ def main():
         omega="n/a", tol="n/a",
     )
 
-    # 16 — Report
+    # 19 — Report
     rpt = _outpath("crns_report.txt")
-    print(f"\n[17] Writing report -> {rpt}")
+    print(f"\n[19] Writing report -> {rpt}")
     print(write_report(rpt, params, results))
 
-    # 18 — Plots
-    print("[18] Generating plots ...")
+    # 20 — Plots
+    print("[20] Generating plots ...")
     plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
               results, _outpath("crns_topo_main.png"),
               lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
@@ -735,6 +809,8 @@ def main():
                          _outpath("crns_lulc_worldcover.png"), site_name=NAME)
     plot_lulc_osm(lulc_res, _outpath("crns_lulc_osm.png"),
                   site_name=NAME, map_radius_m=int(r86 * 1.5))
+    plot_sampling_plan(sampling, elev, dx_grid, dy_grid, dist_grid,
+                       _outpath("crns_sampling_plan.png"), site_name=NAME)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")

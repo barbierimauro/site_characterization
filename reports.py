@@ -10,6 +10,9 @@ from site_climate       import report_site_climate, report_power_budget
 from terrain_indices    import report_twi, report_thermal_index
 from get_soil_properties import report_soil_properties
 from vegetation_indices  import report_snow_cover
+from crns_corrections   import report_crns_corrections
+from geology            import report_geology
+from sampling_plan      import report_sampling_plan
 
 
 def write_report(path, params, results):
@@ -43,7 +46,10 @@ def write_report(path, params, results):
     h("NEUTRON FOOTPRINT PARAMETERS")
     s(f"  r86 (sea level ref)  : {results['r86_sealevel']:.1f} m")
     s(f"  r86 (at site, P-cor) : {results['r86']:.1f} m")
-    s(f"  z86 (at site)        : {results['z86']:.2f} cm")
+    s(f"  z86 (at site, +lw)   : {results['z86']:.2f} cm")
+    s(f"    z86 = 8.3 / (rho_b * (0.0564 + theta_v + lw))")
+    s(f"    lw (lattice water) = {results.get('lw', 0.0):.4f} g/g")
+    s(f"    theta_v_SOC (sup.) = {results['site_fluxes'].get('theta_v_soc', 0.0):.4f} m³/m³")
     s(f"  V0 (flat reference)  : {results['V0']:.2f} m3")
     s(f"    (cylinder: pi*r86^2 * z86, used as denominator of kappa)")
     s(f"  V_eff (actual soil)  : {results['Veff']:.2f} m3")
@@ -75,8 +81,14 @@ def write_report(path, params, results):
     s(f"    The muon-normalised neutron count must be DIVIDED by kappa_muon")
     s(f"    to recover the flux equivalent to an open-sky reference station.")
     s()
+    s(f"  kappa_lulc           : {results.get('kappa_lulc', 1.0):.4f}")
+    s(f"    Fonte: ESA WorldCover 10m — rapporto H footprint / H suolo baseline.")
+    s(f"    kappa_lulc > 1: alta presenza di acqua/vegetazione nel footprint.")
+    s(f"    kappa_lulc < 1: bassa presenza di H (asfalto, roccia nuda).")
+    s(f"    Condizione di riferimento: θ_v_init = {params['theta_v_init']:.3f} m³/m³.")
+    s()
     s(f"  kappa_total          : {results['kappa_total']:.4f}")
-    s(f"    = kappa_topo x kappa_muon (both effects combined)")
+    s(f"    = kappa_topo × kappa_muon × kappa_lulc (tutti gli effetti combinati)")
     s()
 
     h("SOIL MOISTURE CORRECTION")
@@ -133,6 +145,28 @@ def write_report(path, params, results):
 
     h("LULC — LAND USE / LAND COVER")
     s(report_lulc(results['lulc']))
+    s()
+
+    h("GEOLOGY (MACROSTRAT API)")
+    if 'geology' in results:
+        s(report_geology(results['geology']))
+    else:
+        s("  [non disponibile]")
+    s()
+
+    h("CRNS SUPPLEMENTARY CORRECTIONS (WV, AGBH, SWE)")
+    if 'crns_corrections' in results:
+        z86 = results.get('z86', 15.0)
+        s(report_crns_corrections(results['crns_corrections'], z86_cm=z86))
+    else:
+        s("  [non disponibile]")
+    s()
+
+    h("OPTIMAL SOIL SAMPLING PLAN")
+    if 'sampling' in results:
+        s(report_sampling_plan(results['sampling']))
+    else:
+        s("  [non disponibile]")
     s()
 
     h("OUTPUT FILES — DESCRIPTION")

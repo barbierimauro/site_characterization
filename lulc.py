@@ -599,10 +599,14 @@ def compute_osm_kappa(elements, lat, lon, r86,
         })
 
     footprint_area   = float(footprint.area)
-    baseline_area    = max(0.0, footprint_area - osm_covered_area)
-    W_mean_fp        = (float(np.mean(W_grid[fp_mask]))
-                        if fp_mask.any() else 1.0)
-    baseline_contrib = W_mean_fp * baseline_area * WC_BASELINE_FH
+
+    # Contributo baseline corretto: denom - somma dei pesi W già assegnati a OSM
+    # denom = integral W(r)*dA su TUTTI i pixel DEM nel footprint
+    # osm_W_area = integral W(r)*dA sui pixel OSM (calcolato come W_i * area_i)
+    # baseline_contrib = f_H_baseline * (denom - osm_W_area)
+    # Questo usa la distribuzione spaziale reale di W(r) invece di W_mean.
+    osm_W_area       = sum(c["W_r"] * c["area_m2"] for c in contributions)
+    baseline_contrib = WC_BASELINE_FH * max(0.0, denom - osm_W_area)
 
     osm_num   = sum(c["contrib"] for c in contributions)
     kappa     = (osm_num + baseline_contrib) / denom \
@@ -656,13 +660,24 @@ def get_lulc(
     dx_grid, dy_grid, dist_grid,
     r86,
     cache_dir,
-    osm_radius_m = 600,
-    verbose      = True,
+    osm_radius_m  = 600,
+    theta_v_init  = 0.20,   # SM di input [m³/m³] — usata per documentare
+                             # la condizione di riferimento di kappa_lulc
+    verbose       = True,
 ):
     """
     Calcola LULC e kappa_lulc per un sito CRNS da due sorgenti:
       - ESA WorldCover 10m (Planetary Computer)
       - OSM Overpass API (vettoriale)
+
+    NOTA sui valori f_H e theta_v:
+        I valori f_H nella lookup table (es. acqua=4.0, foresta=1.5) sono
+        normalizzati rispetto al suolo di riferimento (f_H=1.0 = baseline soil).
+        kappa_lulc è il rapporto H_footprint / H_baseline_soil e dipende
+        implicitamente da theta_v_init: al variare di theta_v, il rapporto tra
+        le varie coperture rimane approssimativamente costante solo se le
+        variazioni di SM sono uniformi nel footprint. theta_v_init è quindi
+        la condizione di riferimento per cui i kappa_lulc calcolati sono validi.
 
     Parameters
     ----------
@@ -672,6 +687,7 @@ def get_lulc(
     r86                 : raggio footprint [m]
     cache_dir           : directory cache locale
     osm_radius_m        : raggio download OSM [m]  (default 600)
+    theta_v_init        : SM di riferimento [m³/m³] (da main.py THETA_V_INIT)
     verbose             : stampa progressi
 
     Returns
@@ -746,6 +762,7 @@ def get_lulc(
         osm_from_cache     = osm_from_cache,
         lat=lat, lon=lon, r86=r86,
         osm_radius_m       = osm_radius_m,
+        theta_v_ref        = float(theta_v_init),
     )
 
 

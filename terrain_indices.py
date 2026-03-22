@@ -30,6 +30,9 @@ Email       : mauro.barbieri@pm.me
 import numpy as np
 import heapq
 import multiprocessing as mp
+import hashlib
+import json
+import os
 
 
 # ===========================================================================
@@ -218,6 +221,61 @@ def _twi_strip_worker(args):
 # FUNZIONE PUBBLICA 1 — TWI
 # ===========================================================================
 
+def _twi_cache_path(cache_dir, elev, r86, slope_min_rad):
+    """Hash univoco per il DEM e i parametri TWI."""
+    # Usiamo il digest dei valori medi, shape e r86 come fingerprint leggero
+    tag = (f"{elev.shape}_{r86:.1f}_{slope_min_rad:.5f}_"
+           f"{np.nanmean(elev):.4f}_{np.nanstd(elev):.4f}")
+    h = hashlib.sha256(tag.encode()).hexdigest()[:16]
+    return os.path.join(cache_dir, f"twi_cache_{h}.npz")
+
+
+def _save_twi_cache(result, cache_dir, elev, r86, slope_min_rad):
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _twi_cache_path(cache_dir, elev, r86, slope_min_rad)
+    # Salva array e scalari separatamente
+    np.savez_compressed(
+        path,
+        twi_map           = result['twi_map'],
+        twi_class_map     = result['twi_class_map'],
+        twi_class_edges   = result['twi_class_edges'],
+        slope_map_deg     = result['slope_map_deg'],
+        drainage_area_m   = result['drainage_area_m'],
+        twi_class_fracs   = result['twi_class_fractions'],
+    )
+    # scalari in JSON sidecar
+    meta = {k: float(result[k]) for k in (
+        'twi_mean_fp','twi_std_fp','twi_min_fp','twi_max_fp',
+        'twi_weighted','slope_mean_fp_deg','dx_m')}
+    with open(path + ".json", "w") as f:
+        json.dump(meta, f)
+    print(f"   TWI cached -> {path}", flush=True)
+
+
+def _load_twi_cache(cache_dir, elev, r86, slope_min_rad):
+    if cache_dir is None:
+        return None
+    path = _twi_cache_path(cache_dir, elev, r86, slope_min_rad)
+    if not (os.path.exists(path) and os.path.exists(path + ".json")):
+        return None
+    try:
+        d    = np.load(path)
+        meta = json.load(open(path + ".json"))
+        print(f"   TWI loaded from cache: {path}", flush=True)
+        return dict(
+            twi_map             = d['twi_map'],
+            twi_class_map       = d['twi_class_map'],
+            twi_class_edges     = d['twi_class_edges'],
+            slope_map_deg       = d['slope_map_deg'],
+            drainage_area_m     = d['drainage_area_m'],
+            twi_class_fractions = d['twi_class_fracs'],
+            **meta,
+        )
+    except Exception as e:
+        print(f"   TWI cache load failed ({e}), recomputing.", flush=True)
+        return None
+
+
 def compute_twi(
     elev,
     dx_grid,
@@ -227,6 +285,7 @@ def compute_twi(
     slope_min_rad = 0.001,    # pendenza minima per evitare TWI -> inf [rad]
     n_classes     = 5,        # classi TWI per la mappa
     n_cores       = 1,        # worker multiprocessing
+    cache_dir     = None,     # directory cache; None = no cache
 ):
     """
     Topographic Wetness Index dal DEM.
@@ -267,6 +326,13 @@ def compute_twi(
         slope_mean_fp_deg : pendenza media nel footprint [gradi]
         dx_m              : risoluzione pixel usata [m]
     """
+
+    # ------------------------------------------------------------------ #
+    # Cache: carica se disponibile
+    # ------------------------------------------------------------------ #
+    cached = _load_twi_cache(cache_dir, elev, r86, slope_min_rad)
+    if cached is not None:
+        return cached
 
     # ------------------------------------------------------------------ #
     # Risoluzione pixel
@@ -359,7 +425,7 @@ def compute_twi(
 
     slope_mean_fp = float(np.nanmean(slope_deg_map[fp_mask]))
 
-    return dict(
+    result = dict(
         twi_map              = twi,
         twi_class_map        = cls_map,
         twi_class_edges      = edges,
@@ -375,6 +441,8 @@ def compute_twi(
         slope_mean_fp_deg    = slope_mean_fp,
         dx_m                 = dx_m,
     )
+    _save_twi_cache(result, cache_dir, elev, r86, slope_min_rad)
+    return result
 
 
 def report_twi(res):
