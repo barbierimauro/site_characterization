@@ -93,13 +93,45 @@ crns_corr = get_crns_corrections(LAT, LON,
 geology = get_geology(LAT, LON)
 
 # -------------------------------------------------------
-# Step 13  Sampling plan
+# Step 13  ERA5-Land hourly soil moisture  (era5sm.py)
+# Downloads year-by-year from start_year to present.
+# Results cached as hourly_YYYY.npz + monthly_agg.npz.
+# -------------------------------------------------------
+era5_sm = get_era5_soil_moisture(
+    LAT, LON,
+    cache_dir   = OUTPUT_DIR,
+    start_year  = 2015,
+    verbose     = True,
+)
+# era5_sm keys: sm0_7_monthly_mean/std/min/max/nobs (12,)
+#               sm7_28_*, sm28_100_*
+#               sm_profile_mean (3,), sm_profile_depths (3,)
+#               sm0_7_current, years_available, site_dir
+
+# -------------------------------------------------------
+# Step 14  Downscaled soil moisture estimate  (smphysics.py)
+# Data fusion: ERA5 + SoilGrids + TWI + PISR + LULC.
+# -------------------------------------------------------
+sm_fused = fuse_soil_moisture(
+    era5_res    = era5_sm,
+    soil_res    = soil,
+    twi_res     = twi,
+    climate_res = crns_corr,
+    lulc_res    = lulc_result,
+)
+# sm_fused keys: theta_monthly (12,), theta_monthly_low/high (12,)
+#               theta_annual_mean, theta_current
+#               FC_local, WP_local, SAT_local, sigma_total
+#               era5_raw_monthly, corrections
+
+# -------------------------------------------------------
+# Step 15  Sampling plan
 # -------------------------------------------------------
 sampling = compute_sampling_plan(r86_act, P=site_pressure(ELEV))
 plot_sampling_plan(sampling, dem, dx, dy, dist_grid)
 
 # -------------------------------------------------------
-# Step 14  Assemble and write report
+# Step 16  Assemble and write report
 # -------------------------------------------------------
 results = {
     'kappa_topo': kappa_topo,
@@ -111,6 +143,8 @@ results = {
     'soc_gkg':    soc_gkg,
     'crns_corrections': crns_corr,
     'geology':    geology,
+    'era5_sm':    era5_sm,
+    'sm_fused':   sm_fused,
     'sampling':   sampling,
     ...
 }

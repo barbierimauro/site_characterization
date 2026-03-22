@@ -5,7 +5,7 @@
 
 \subsection{Pipeline Overview}
 
-The pipeline executes sequentially in 18 numbered steps.
+The pipeline executes sequentially in 16 numbered steps.
 Each step caches its result to disk (JSON or NumPy \texttt{.npz});
 on re-run with identical inputs only missing steps are recomputed.
 The high-level sequence is:
@@ -29,8 +29,10 @@ The high-level sequence is:
         $\rho_{WV}$, $f_{WV}$, SWE (monthly).
   \item Download MODIS LAI and compute AGBH.
   \item Query Macrostrat for geological characterisation.
-  \item Compute Topographic Wetness Index (TWI), loaded from cache
-        if available.
+  \item Download ERA5-Land hourly soil moisture (year by year,
+        cached); compute multi-year monthly statistics.
+  \item Downscale and fuse ERA5 soil moisture with local pedology,
+        topography, and land cover; propagate uncertainty.
   \item Compute optimal soil sampling plan and $\rzz$ dynamic range.
   \item Assemble the full report (PDF + JSON).
 \end{enumerate}
@@ -232,6 +234,101 @@ $[0.01,\, 0.50]$ \si{\cubic\metre\per\cubic\metre}.
 This shows how the footprint radius, and hence the spatial
 representativeness of the measurements, changes between dry and
 wet conditions at the site.
+
+\subsection{Soil Moisture Downscaling and Data Fusion}
+\label{sec:methods:smfusion}
+
+ERA5-Land soil moisture has a native resolution of $\sim$9\,km and is
+produced with a globally uniform land-surface model.
+Local conditions (topography, soil texture, land cover) can shift
+the true soil moisture at the CRNS site significantly relative to the
+ERA5 grid-cell value.
+The module \texttt{smphysics.py} applies a sequential chain of
+physically motivated corrections implemented in \texttt{fuse\_soil\_moisture()}.
+
+\paragraph{Step 1 — ERA5 raw signal.}
+The 0--7\,cm monthly mean from \texttt{era5sm.py} is used as the
+starting estimate, as this layer most closely matches the effective
+sensing depth of CRNS at low to moderate moisture.
+
+\paragraph{Step 2 — Pedological rescaling (Saxton \& Rawls 2006).}
+ERA5-Land uses globally uniform hydraulic parameters.
+Site-specific Field Capacity (FC) and Wilting Point (WP) are derived
+from the SoilGrids sand, clay, and organic-matter fractions via the
+pedotransfer functions of \citet{saxton2006}:
+\begin{equation}
+  \theta_\mathrm{local} = \mathrm{WP}_\mathrm{loc}
+    + \frac{\theta_\mathrm{ERA5} - \mathrm{WP}_\mathrm{ERA5}}
+           {\mathrm{FC}_\mathrm{ERA5} - \mathrm{WP}_\mathrm{ERA5}}
+    \left(\mathrm{FC}_\mathrm{loc} - \mathrm{WP}_\mathrm{loc}\right),
+  \label{eq:pedol_rescaling}
+\end{equation}
+with $\mathrm{FC}_\mathrm{ERA5} = 0.32$ and
+$\mathrm{WP}_\mathrm{ERA5} = 0.12$\,\si{\cubic\metre\per\cubic\metre}
+as representative global defaults.
+The result is clipped to $[\mathrm{WP}_\mathrm{loc},\,\mathrm{FC}_\mathrm{loc}]$.
+
+\paragraph{Step 3 — Topographic correction.}
+Two terrain effects are applied:
+\begin{enumerate}[nosep]
+  \item \emph{TWI term (additive):}
+        sites with TWI above the footprint mean accumulate more lateral
+        flow and are therefore wetter:
+        \begin{equation}
+          \Delta\theta_\mathrm{TWI}
+            = \beta_\mathrm{TWI}
+              \left(\mathrm{TWI}_\mathrm{site} - \overline{\mathrm{TWI}}_\mathrm{fp}\right),
+          \label{eq:delta_twi}
+        \end{equation}
+        with default $\beta_\mathrm{TWI} = 0.008$\,\si{\cubic\metre\per\cubic\metre}
+        per TWI unit, clipped to $\pm0.15$.
+  \item \emph{PISR term (multiplicative):}
+        higher annual solar irradiation increases evapotranspiration
+        and dries the soil:
+        \begin{equation}
+          f_\mathrm{PISR}
+            = \exp\!\left(-\alpha_\mathrm{PISR}
+              \frac{\mathrm{PISR}_\mathrm{site} - \mathrm{PISR}_\mathrm{ERA5}}
+                   {\mathrm{PISR}_\mathrm{ERA5}}\right),
+          \label{eq:f_pisr}
+        \end{equation}
+        with default $\alpha_\mathrm{PISR} = 0.12$.
+\end{enumerate}
+The combined topographic correction is
+$\theta_\mathrm{topo} = (\theta_\mathrm{local} + \Delta\theta_\mathrm{TWI})
+ \times f_\mathrm{PISR}$.
+
+\paragraph{Step 4 — LULC correction.}
+A categorical correction is applied based on WorldCover class fractions
+and the $\kappa_\mathrm{LULC}$ already computed for the neutron sensitivity
+model:
+\begin{itemize}[nosep]
+  \item Snow/ice $> 30\%$: $\theta \times 0.4$ (snow is not liquid water);
+  \item Impervious (built-up + bare) $> 50\%$: $\theta \times 0.30$;
+  \item Impervious $20$--$50\%$: $\theta \times (1 - 0.5\,f_\mathrm{imp})$;
+  \item Wetland + forest $> 40\%$ and $\kappa_\mathrm{LULC} > 1.2$:
+        $\theta \times 1.10$ (structurally wet surface).
+\end{itemize}
+
+\paragraph{Uncertainty.}
+A total uncertainty is propagated in quadrature from four independent
+components (Gaussian error propagation):
+\begin{equation}
+  \sigma_\mathrm{total}
+    = \sqrt{\sigma_\mathrm{ERA5}^2
+          + \sigma_\mathrm{topo}^2
+          + \sigma_\mathrm{pedol}^2
+          + \sigma_\mathrm{LULC}^2}
+    \approx 0.066\;\si{\cubic\metre\per\cubic\metre},
+  \label{eq:sigma_sm}
+\end{equation}
+with default components
+$\sigma_\mathrm{ERA5} = 0.05$,
+$\sigma_\mathrm{topo} = 0.02$,
+$\sigma_\mathrm{pedol} = 0.03$,
+$\sigma_\mathrm{LULC} = 0.02$.
+The report provides monthly $\theta_v \pm \sigma$ bounds alongside the
+ERA5 raw signal.
 
 \subsection{Geological Characterisation}
 

@@ -35,10 +35,10 @@ SoilGrids 2.0
   & Sand, silt, clay (\%), bulk density, SOC
   & 250 m
   & ISRIC REST API \\
-ERA5 / Open-Meteo Archive
-  & Temperature, relative humidity, snowfall,
-    snow depth (daily, 5 yr)
-  & $\sim$30 km
+ERA5-Land / Open-Meteo Archive
+  & Temperature, RH, snowfall, snow depth (daily, 5 yr);
+    soil moisture 0--100 cm (hourly, $\geq$2015)
+  & $\sim$9 km (soil moisture) / $\sim$30 km (climate)
   & Open-Meteo REST API \\
 MODIS MOD15A2H
   & Leaf Area Index (LAI), 8-day composites
@@ -148,6 +148,29 @@ Snow-water equivalent (SWE) is estimated as
 with $h_\mathrm{snow}$ the mean snow depth [m] and
 $\rho_\mathrm{snow} = \SI{250}{\kilo\gram\per\cubic\metre}$ a
 representative seasonal density for wet alpine snow.
+
+\subsection{Soil Moisture — ERA5-Land}
+\label{sec:data:era5sm}
+
+Hourly volumetric soil moisture is retrieved from the ERA5-Land
+reanalysis via the Open-Meteo Historical API.
+The module \texttt{era5sm.py} downloads three depth layers:
+0--7\,cm, 7--28\,cm, and 28--100\,cm, all in
+\si{\cubic\metre\per\cubic\metre}.
+Downloads proceed year by year from a configurable
+\texttt{start\_year} (default 2015) to the current date, with
+each annual time-series stored as a compressed \texttt{.npz} file
+(\texttt{hourly\_YYYY.npz}).
+Monthly statistics (mean, standard deviation, minimum, maximum, and
+observation count) are derived from the full multi-year record and
+cached in a single \texttt{monthly\_agg.npz}.
+On subsequent runs only missing years are downloaded; the monthly
+aggregates are recomputed only if the set of cached years has
+changed.
+
+The three ERA5-Land depth layers bracket the typical CRNS
+penetration depth $z_{86}$, making the 0--7\,cm layer the primary
+reference for the data-fusion step (Section~\ref{sec:methods:smfusion}).
 
 \subsection{Vegetation (LAI)}
 
