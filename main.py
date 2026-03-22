@@ -99,6 +99,8 @@ from crns_corrections import get_crns_corrections, report_crns_corrections
 from geology import get_geology, report_geology
 from sampling_plan import (compute_sampling_plan, report_sampling_plan,
                             plot_sampling_plan)
+from era5sm import (get_era5_soil_moisture, report_era5_sm, plot_era5_sm)
+from smphysics import (fuse_soil_moisture, report_sm_fusion, plot_sm_fusion)
 
 try:
     import rasterio
@@ -720,8 +722,28 @@ def main():
     geology = get_geology(LAT, LON, cache_dir=_OUT)
     print(report_geology(geology))
 
-    # 18 — Optimal soil sampling plan
-    print("\n[18] Computing optimal soil sampling plan ...")
+    # 18 — ERA5-Land hourly soil moisture
+    print("\n[18] Downloading ERA5-Land soil moisture ...")
+    era5_sm = get_era5_soil_moisture(
+        LAT, LON,
+        cache_dir  = _OUT,
+        start_year = 2015,
+        verbose    = True,
+    )
+    print(report_era5_sm(era5_sm))
+
+    # 19 — Downscaled soil moisture (data fusion)
+    print("\n[19] Downscaling soil moisture (ERA5 + local data) ...")
+    sm_fused = fuse_soil_moisture(
+        era5_res    = era5_sm,
+        soil_res    = soil,
+        twi_res     = twi,
+        climate_res = crns_corr,
+        lulc_res    = lulc_res,
+        verbose     = True,
+    )
+    print(report_sm_fusion(sm_fused))
+
     sampling = compute_sampling_plan(
         r86,
         theta_v_init = THETA_V_INIT,
@@ -756,6 +778,8 @@ def main():
         desilets_curve=desilets_curve,
         crns_corrections=crns_corr,
         geology=geology,
+        era5_sm=era5_sm,
+        sm_fused=sm_fused,
         sampling=sampling,
         history=[],   # no iteration history with cell-summation method
     )
@@ -767,13 +791,13 @@ def main():
         omega="n/a", tol="n/a",
     )
 
-    # 19 — Report
+    # 21 — Report
     rpt = _outpath("crns_report.txt")
-    print(f"\n[19] Writing report -> {rpt}")
+    print(f"\n[21] Writing report -> {rpt}")
     print(write_report(rpt, params, results))
 
-    # 20 — Plots
-    print("[20] Generating plots ...")
+    # 22 — Plots
+    print("[22] Generating plots ...")
     plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
               results, _outpath("crns_topo_main.png"),
               lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
@@ -811,6 +835,8 @@ def main():
                   site_name=NAME, map_radius_m=int(r86 * 1.5))
     plot_sampling_plan(sampling, elev, dx_grid, dy_grid, dist_grid,
                        _outpath("crns_sampling_plan.png"), site_name=NAME)
+    plot_era5_sm(era5_sm,  _outpath("crns_era5_sm.png"),  site_name=NAME)
+    plot_sm_fusion(sm_fused, _outpath("crns_sm_fusion.png"), site_name=NAME)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")

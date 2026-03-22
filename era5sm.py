@@ -452,9 +452,6 @@ Affiliation :
 Email       : mauro.barbieri@pm.me
 """
 
-import numpy as np
-from era5_soil_moisture import SM_VARIABLES, SM_LABELS, _var_key
-
 MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
           "Jul","Aug","Sep","Oct","Nov","Dec"]
 

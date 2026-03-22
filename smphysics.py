@@ -299,18 +299,6 @@ Affiliation :
 Email       : mauro.barbieri@pm.me
 """
 
-import numpy as np
-import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-from sm_downscaling_physics import (
-    fc_wp_from_soilgrids,
-    topo_correction,
-    pedological_rescaling,
-    lulc_correction,
-    combined_uncertainty,
-)
-
 MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
           "Jul","Aug","Sep","Oct","Nov","Dec"]
 
