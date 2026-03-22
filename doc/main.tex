@@ -1,0 +1,146 @@
+% ============================================================
+%  CRNS Site Characterization Tool — Technical Note
+%  Compile with: pdflatex main && bibtex main && pdflatex main
+%                             (× 2 for cross-references)
+% ============================================================
+\documentclass[11pt, a4paper]{article}
+
+% --- Encoding & fonts ---
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+
+% --- Page geometry ---
+\usepackage[top=2.5cm, bottom=2.5cm, left=2.8cm, right=2.8cm]{geometry}
+
+% --- Math ---
+\usepackage{amsmath, amssymb}
+
+% --- Graphics & tables ---
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{float}
+\graphicspath{{../}{./figs/}}   % search in parent dir and figs/
+
+% --- Colours ---
+\usepackage[dvipsnames]{xcolor}
+\definecolor{linkblue}{RGB}{0,70,140}
+
+% --- Hyperref (last, mostly) ---
+\usepackage[colorlinks=true,
+            linkcolor=linkblue,
+            citecolor=linkblue,
+            urlcolor=linkblue]{hyperref}
+
+% --- Bibliography ---
+\usepackage{natbib}
+\bibliographystyle{abbrvnat}
+
+% --- Listings for code snippets ---
+\usepackage{listings}
+\lstset{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{gray!10},
+  frame=single, framerule=0.4pt,
+  breaklines=true, breakatwhitespace=true,
+  columns=fullflexible,
+  keywordstyle=\color{blue},
+}
+
+% --- Misc ---
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{siunitx}
+\sisetup{separate-uncertainty=true}
+
+% ---- Custom commands ----
+\newcommand{\kT}{\kappa_\mathrm{topo}}
+\newcommand{\kM}{\kappa_\mathrm{muon}}
+\newcommand{\kL}{\kappa_\mathrm{lulc}}
+\newcommand{\kTot}{\kappa_\mathrm{tot}}
+\newcommand{\thetav}{\theta_v}
+\newcommand{\lw}{l_w}
+\newcommand{\Nzero}{N_0}
+\newcommand{\rzz}{r_{86}}
+\newcommand{\zzz}{z_{86}}
+\newcommand{\cph}{\,\text{cph}}
+
+% ============================================================
+\begin{document}
+% ============================================================
+
+% ---------- Title block ----------
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+
+{\LARGE\bfseries CRNS Site Characterization Tool\\[0.5em]
+\large A Physics-Based Pre-Installation Assessment Pipeline\\
+for Cosmic-Ray Neutron Sensing Stations}
+
+\vspace{1.5cm}
+{\large M.\ Barbieri}
+
+\vspace{0.5cm}
+{\normalsize \today}
+
+\vspace{1cm}
+\rule{0.6\linewidth}{0.4pt}
+
+\vspace{0.8cm}
+\begin{minipage}{0.75\linewidth}
+\centering\small
+\textit{Technical Note — internal document.}\\
+Source code: \url{https://github.com/barbierimauro/site_characterization}
+\end{minipage}
+\end{titlepage}
+
+% ---------- Table of contents ----------
+\tableofcontents
+\newpage
+
+% ============================================================
+%  Sections — each in its own file
+% ============================================================
+
+\input{sec_abstract}
+\newpage
+
+\input{sec_intro}
+\newpage
+
+\input{sec_theory}
+\newpage
+
+\input{sec_datasources}
+\newpage
+
+\input{sec_methods}
+\newpage
+
+\input{sec_example}
+\newpage
+
+\input{sec_limitations}
+
+\input{sec_conclusions}
+\newpage
+
+% ============================================================
+%  Bibliography
+% ============================================================
+\bibliography{refs}
+
+% ============================================================
+%  Appendices
+% ============================================================
+\appendix
+\input{app_variables}
+\input{app_pipeline}
+
+\end{document}

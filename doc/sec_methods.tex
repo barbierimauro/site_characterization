@@ -1,0 +1,254 @@
+% ============================================================
+\section{Computational Methods}
+\label{sec:methods}
+% ============================================================
+
+\subsection{Pipeline Overview}
+
+The pipeline executes sequentially in 18 numbered steps.
+Each step caches its result to disk (JSON or NumPy \texttt{.npz});
+on re-run with identical inputs only missing steps are recomputed.
+The high-level sequence is:
+
+\begin{enumerate}[nosep]
+  \item Download and mosaic Copernicus DEM tiles.
+  \item Compute terrain derivatives (slope, aspect, horizon profile,
+        TWI — cached).
+  \item Download ESA WorldCover and OSM vector features.
+  \item Compute \emph{preliminary} $\rzz$ and $\zzz$ at default
+        $\thetav = 0.20$ and $\lw = 0$.
+  \item Download SoilGrids soil properties for the footprint.
+  \item Compute actual $\lw$ from clay fraction (Eq.~\eqref{eq:lw_clay}),
+        recompute $\zzz$ and $\rzz$.
+  \item Compute $\kT$ (3-D ray-casting over DEM).
+  \item Compute $\kM$ (horizon-based muon integral).
+  \item Compute $\kL$ (WorldCover + OSM, $W(r)$-weighted).
+  \item Compute site neutron flux and $N_0$
+        (Eqs.~\eqref{eq:Nneut_site}--\eqref{eq:N0}).
+  \item Download ERA5 climatology and compute
+        $\rho_{WV}$, $f_{WV}$, SWE (monthly).
+  \item Download MODIS LAI and compute AGBH.
+  \item Query Macrostrat for geological characterisation.
+  \item Compute Topographic Wetness Index (TWI), loaded from cache
+        if available.
+  \item Compute optimal soil sampling plan and $\rzz$ dynamic range.
+  \item Assemble the full report (PDF + JSON).
+\end{enumerate}
+
+\subsection{Terrain Processing}
+\label{sec:methods:terrain}
+
+\paragraph{Slope and aspect.}
+Slope $\beta$ and aspect are derived from the DEM by the standard
+central-difference gradient:
+\begin{equation}
+  \nabla z = \left(\frac{\partial z}{\partial x},\,
+                   \frac{\partial z}{\partial y}\right),
+  \qquad
+  \beta = \arctan|\nabla z|.
+\end{equation}
+A minimum slope floor of $\SI{0.01}{\degree}$ is applied to avoid
+division by zero in subsequent hydrological calculations.
+
+\paragraph{Horizon profile.}
+For each of $N_\phi = 72$ azimuth directions (5° spacing), the
+maximum elevation angle $\psi(\phi)$ is computed by scanning along
+the DEM at that azimuth out to $3\,\rzz$ from the site.
+The result is a 72-element array $\psi(\phi_k)$ that enters both
+the $\kM$ integral and the ray-casting algorithm.
+
+\paragraph{Topographic Wetness Index.}
+TWI is computed as \citep{beven1979}:
+\begin{equation}
+  \mathrm{TWI} = \ln\frac{A_s}{\tan\beta},
+  \label{eq:twi}
+\end{equation}
+where $A_s$ is the specific upslope drainage area per unit contour
+length, derived from the $D_\infty$ flow accumulation of the
+pit-filled DEM \citep{wang2006}.
+Because TWI computation is the most expensive terrain step
+($\mathcal{O}(N_\mathrm{pix}\log N_\mathrm{pix})$ for large DEMs),
+results are cached to disk as a \texttt{.npz} file.
+The cache key is a hash of the DEM shape, pixel spacing, $\rzz$,
+and summary statistics (mean and standard deviation of elevation);
+if the hash matches the stored file the cached result is returned
+directly.
+
+\subsection{Topographic Correction \texorpdfstring{$\kT$}{kappa\_topo}}
+\label{sec:methods:kT}
+
+The 3-D ray-casting implementation samples $N_\theta = 18$ zenith
+angles (uniformly in $\cos\theta$, $0^\circ$–$89^\circ$) and
+$N_\phi = 72$ azimuth angles.
+For each ray $(\theta_k, \phi_j)$:
+\begin{enumerate}[nosep]
+  \item March along the ray in 3-D until it intersects the DEM
+        surface, recording the air path length $L_\mathrm{air}$.
+  \item At the intersection, read the surface slope $\alpha$ and
+        compute $L_\mathrm{soil} = \zzz / \cos\alpha$.
+  \item Evaluate Eq.~\eqref{eq:ray}.
+\end{enumerate}
+The flat-reference integral uses a perfectly horizontal DEM at
+the sensor elevation.
+Both integrals are computed with the same angular sampling;
+$\kT$ is their ratio.
+
+Rays that exit the DEM bounding box without hitting terrain
+(i.e., the site is on a ridge or cliff edge) contribute zero to the
+numerator but retain their full flat-reference contribution in the
+denominator, correctly reducing $\kT$ below 1.
+
+\subsection{LULC Correction and Supplementary Hydrogen}
+\label{sec:methods:kL}
+
+\paragraph{WorldCover raster.}
+Each 10-m WorldCover pixel within $2\,\rzz$ of the site is assigned
+the hydrogen equivalence factor $f_H^{(c)}$ from Table~\ref{tab:fH}.
+The radial weight $W(r_i)$ (Eq.~\eqref{eq:Wr}) is evaluated at the
+pixel centroid distance $r_i$.
+The correction factor $\kL$ follows Eq.~\eqref{eq:kappa_lulc}.
+
+\paragraph{OSM vector features.}
+OSM polygons (buildings, water bodies, sealed roads) are rasterised
+onto the DEM grid at 1-m resolution and then downsampled to the
+DEM pixel size.
+For pixels with OSM overlap the WorldCover $f_H$ is replaced by the
+OSM-specific value (e.g.\ $f_H = 4.0$ for permanent water,
+$f_H = 0.05$ for sealed surfaces).
+The uncovered area inside the $2\,\rzz$ circle contributes
+\begin{equation}
+  \mathrm{base\_contrib} =
+    f_H^\mathrm{base} \times
+    \max\!\bigl(0,\;
+      \textstyle\sum_i W(r_i)\,A_i - \sum_{j\in\mathrm{OSM}} W(r_j)\,A_j
+    \bigr),
+  \label{eq:osm_baseline}
+\end{equation}
+where $f_H^\mathrm{base}$ is the WorldCover bare-soil baseline
+($f_H = 0.03$) and the difference of $W$-weighted integrals
+avoids the spatially averaged approximation used in simpler
+implementations.
+
+\paragraph{Reference moisture.}
+All $f_H$ values and the WorldCover baseline are computed at the
+user-specified initial soil moisture $\thetav^\mathrm{ref}$
+(\texttt{THETA\_V\_INIT} in the configuration file, default
+$\SI{0.20}{\cubic\metre\per\cubic\metre}$).
+This makes $\kL$ physically consistent with the $\rzz$ and
+$\zzz$ computed at the same moisture level.
+
+\subsection{Supplementary Correction Factors}
+\label{sec:methods:suppl}
+
+These factors are not included in $\kTot$ but are reported separately
+as operational correction guidance.
+
+\paragraph{Atmospheric water vapour.}
+\label{sec:methods:wv}
+An increase in above-sensor water vapour reduces the epithermal
+neutron flux reaching the ground.
+Following \citet{rosolem2013}, the correction factor is:
+\begin{equation}
+  f_{WV} = \exp\!\bigl(-\alpha_{WV}\,\rho_{WV}\bigr),
+  \label{eq:fWV}
+\end{equation}
+with $\alpha_{WV} = \SI{0.0054}{\metre\cubed\per\gram}$
+\citep{zreda2012}.
+Monthly climatological values of $\rho_{WV}$
+(Eqs.~\eqref{eq:esat}–\eqref{eq:rhoWV}) and the corresponding
+$f_{WV}$ are tabulated in the report.
+Note that $f_{WV}$ is an operational (epoch-by-epoch) correction;
+the climatology here serves as site-characterisation guidance.
+
+\paragraph{Above-ground biomass hydrogen (AGBH).}
+\label{sec:methods:agbh}
+Vegetation intercepts and stores water; the associated hydrogen
+moderates neutrons \citep{baatz2015, schron2017}.
+An effective soil-moisture equivalent is estimated as:
+\begin{equation}
+  \mathrm{AGBH} = \mathrm{LAI} \times \SI{150}{\gram\per\metre\squared}
+                  + \theta_\mathrm{litter}
+  \quad[\si{\milli\metre}],
+  \label{eq:agbh}
+\end{equation}
+where the 150 g m$^{-2}$ factor is the mean interception capacity
+per unit LAI \citep{schron2017} and $\theta_\mathrm{litter}$ is an
+optional litter-water depth.
+
+\paragraph{Snow-water equivalent.}
+Snow on the ground effectively acts as liquid water from the
+neutron probe's perspective.
+Monthly mean SWE (Eq.~\eqref{eq:swe}) is reported alongside
+the month in which snow cover first exceeds
+$\SI{150}{\milli\metre}$ SWE — a threshold at which the detector
+is largely opaque to cosmic-ray neutrons and calibration is
+impractical \citep{bogena2017}.
+
+\paragraph{Soil organic carbon hydrogen equivalent.}
+Soil organic matter (SOM) contains hydrogen at a concentration
+similar to liquid water.
+The volumetric hydrogen equivalent is approximated as
+\citep{bogena2017}:
+\begin{equation}
+  \theta_\mathrm{SOC} \approx
+    0.55\,\rho_b\,\omega_\mathrm{SOM}
+  \quad[\si{\cubic\metre\per\cubic\metre}],
+  \label{eq:thetaSOC}
+\end{equation}
+where $\omega_\mathrm{SOM}$ is the SOM mass fraction [g/g]
+(SOM $\approx 1.724\times$ SOC by convention).
+This term is reported alongside $\lw$ as a supplementary offset
+that does not change with time.
+
+\subsection{Optimal Soil Sampling Plan}
+\label{sec:methods:sampling}
+
+A CRNS calibration requires in-situ gravimetric soil moisture
+measurements distributed across the footprint in proportion to
+the neutron sensitivity kernel $W(r)$.
+The pipeline designs a plan of $n_\mathrm{tot} = 26$ sampling
+locations arranged in four concentric rings at radii
+$r_k = \{0.25,\, 0.50,\, 0.75,\, 1.00\} \times \rzz$.
+
+\paragraph{Ring weight.}
+The contribution of ring $k$ to the footprint integral is
+\begin{equation}
+  \Phi_k = \int_{r_{k-1}}^{r_k} W(r)\,2\pi r\,\mathrm{d}r,
+  \label{eq:ring_weight}
+\end{equation}
+evaluated numerically by the trapezoidal rule.
+Points per ring $n_k \in \{4, 6, 8, 8\}$ are allocated so that
+$n_k / \sum n_j \approx \Phi_k / \sum \Phi_j$.
+
+\paragraph{Sample depth.}
+At each location, soil is sampled at three depth intervals
+(0–5, 5–15, 15–30 cm) to resolve the vertical weighting of
+neutron penetration.
+
+\paragraph{Footprint dynamic range.}
+As supplementary information, the report includes a plot of
+$\rzz(\thetav)$ computed over the full moisture range
+$[0.01,\, 0.50]$ \si{\cubic\metre\per\cubic\metre}.
+This shows how the footprint radius, and hence the spatial
+representativeness of the measurements, changes between dry and
+wet conditions at the site.
+
+\subsection{Geological Characterisation}
+
+The Macrostrat API v2 is queried with the site coordinates at three
+resolution scales (large, medium, small) in descending order of
+coverage.
+The first non-empty response is used.
+The pipeline extracts:
+\begin{itemize}[nosep]
+  \item dominant lithology name and Macrostrat rock type
+        (carbonate, siliciclastic, igneous, \ldots);
+  \item estimated influence on $\lw$ (low, medium, high), based on
+        the known hydrogen content of the rock type;
+  \item an indicative radiogenicity level (for U/Th-based radiation
+        background assessment);
+  \item geologic age era (Cenozoic, Mesozoic, Palaeozoic, Precambrian).
+\end{itemize}
+This qualitative summary complements the quantitative SoilGrids
+$\lw$ estimate when geological context is relevant (e.g.\
+evaporite-rich or serpentinised terrain).

@@ -1,0 +1,151 @@
+% ============================================================
+\section{Pipeline Pseudocode}
+\label{app:pipeline}
+% ============================================================
+
+The following pseudocode summarises the full execution sequence of
+the \texttt{crns-sitechar} pipeline (cf.\ \texttt{main.py}).
+Each numbered step corresponds to a function call that may read from
+or write to the on-disk cache.
+
+\begin{lstlisting}[language=Python, caption={CRNS site characterization
+  pipeline — top-level pseudocode (main.py).},
+  label={lst:pipeline}]
+# -------------------------------------------------------
+# Input parameters (from config or CLI)
+# -------------------------------------------------------
+LAT, LON          = 46.4, 11.3        # decimal degrees
+THETA_V_INIT      = 0.20              # m^3/m^3, design moisture
+N_SL              = 2800              # cph, detector reference
+OUTPUT_DIR        = "output/"
+
+# -------------------------------------------------------
+# Step 1-2  Terrain
+# -------------------------------------------------------
+dem, dx, dy = download_dem(LAT, LON, buffer=3*r86_approx())
+slope, aspect, horizon = compute_terrain_derivatives(dem, dx, dy)
+twi = compute_twi(dem, slope, cache_dir=OUTPUT_DIR)   # cached
+
+# -------------------------------------------------------
+# Step 3   Preliminary footprint parameters
+# -------------------------------------------------------
+r86_prelim = r86(THETA_V_INIT, P=site_pressure(ELEV))
+z86_prelim = z86(THETA_V_INIT, rho_b=1.2, lw=0.0)
+
+# -------------------------------------------------------
+# Step 4   Land-cover and OSM
+# -------------------------------------------------------
+worldcover = download_worldcover(LAT, LON, r86_prelim)
+osm        = download_osm(LAT, LON, r86_prelim)
+
+# -------------------------------------------------------
+# Step 5   Soil properties (SoilGrids)
+# -------------------------------------------------------
+soil = download_soilgrids(LAT, LON)
+rho_b   = soil['bulk_density_gcc']
+clay_gg = soil['clay_gg']
+soc_gkg = soil['soc_gkg']
+lw      = 0.097 * clay_gg + 0.033     # Kohli 2021
+
+# -------------------------------------------------------
+# Step 6   Updated footprint with actual lw and rho_b
+# -------------------------------------------------------
+z86_act = z86(THETA_V_INIT, rho_b, lw)
+r86_act = r86(THETA_V_INIT, P=site_pressure(ELEV))
+
+# -------------------------------------------------------
+# Step 7   kappa_topo  (3-D ray-casting)
+# -------------------------------------------------------
+kappa_topo = compute_kappa_topo(dem, z86_act, rho_b,
+                                n_theta=18, n_phi=72)
+
+# -------------------------------------------------------
+# Step 8   kappa_muon  (horizon integral)
+# -------------------------------------------------------
+kappa_muon = compute_kappa_muon(horizon)
+
+# -------------------------------------------------------
+# Step 9   kappa_lulc  (W(r)-weighted f_H)
+# -------------------------------------------------------
+lulc_result = get_lulc(worldcover, osm, dem, dx, dy,
+                       r86_act, theta_v_init=THETA_V_INIT)
+kappa_lulc  = lulc_result['wc_kappa']
+
+# -------------------------------------------------------
+# Step 10  Site fluxes and N0
+# -------------------------------------------------------
+kappa_tot = kappa_topo * kappa_muon * kappa_lulc
+flux = compute_site_fluxes(LAT, LON, ELEV, N_SL,
+                           lw=lw, soc_gkg=soc_gkg,
+                           rho_b=rho_b,
+                           kappa_tot=kappa_tot)
+N0  = flux['N0']
+
+# -------------------------------------------------------
+# Step 11  Atmospheric / snow seasonality  (ERA5)
+# -------------------------------------------------------
+crns_corr = get_crns_corrections(LAT, LON,
+                                 lai=vegetation['lai_mean'])
+
+# -------------------------------------------------------
+# Step 12  Geological characterisation  (Macrostrat)
+# -------------------------------------------------------
+geology = get_geology(LAT, LON)
+
+# -------------------------------------------------------
+# Step 13  Sampling plan
+# -------------------------------------------------------
+sampling = compute_sampling_plan(r86_act, P=site_pressure(ELEV))
+plot_sampling_plan(sampling, dem, dx, dy, dist_grid)
+
+# -------------------------------------------------------
+# Step 14  Assemble and write report
+# -------------------------------------------------------
+results = {
+    'kappa_topo': kappa_topo,
+    'kappa_muon': kappa_muon,
+    'kappa_lulc': kappa_lulc,
+    'kappa_tot':  kappa_tot,
+    'N0':         N0,
+    'lw':         lw,
+    'soc_gkg':    soc_gkg,
+    'crns_corrections': crns_corr,
+    'geology':    geology,
+    'sampling':   sampling,
+    ...
+}
+write_report(results, OUTPUT_DIR)
+save_json(results, OUTPUT_DIR / "results.json")
+\end{lstlisting}
+
+Figure~\ref{fig:flowchart} illustrates the data flow between modules.
+
+\begin{figure}[H]
+  \centering
+  % The flowchart is generated at run time by the pipeline itself
+  % and saved to OUTPUT_DIR/pipeline_flowchart.pdf.
+  \includegraphics[width=0.95\linewidth]{pipeline_flowchart}
+  \caption{Data-flow diagram of the CRNS site characterization
+    pipeline.
+    Rectangles denote processing steps; cylinders denote on-disk
+    caches; rounded rectangles denote external data sources.
+    Arrows indicate data dependencies.}
+  \label{fig:flowchart}
+\end{figure}
+
+\paragraph{Cache strategy.}
+Each expensive step writes its result to a uniquely named file in
+\texttt{OUTPUT\_DIR} (e.g.\
+\texttt{dem\_mosaic.npz}, \texttt{soilgrids\_0\_30cm.json},
+\texttt{twi\_cache\_<hash>.npz}).
+At the start of each step the pipeline checks whether the output
+file already exists and, if so, loads it directly.
+This means that a run interrupted halfway can be resumed from the
+last successful step with no data re-download.
+
+\paragraph{Configuration.}
+All tunable parameters (site coordinates, $N_\mathrm{sl}$,
+$\thetav^\mathrm{ref}$, ray-casting resolution, ring fractions,
+download time-out) are collected in a single block at the top of
+\texttt{main.py} and are documented in Table~\ref{tab:variables}.
+No external configuration file is required for standard use.

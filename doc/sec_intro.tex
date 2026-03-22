@@ -1,0 +1,92 @@
+% ============================================================
+\section{Introduction}
+% ============================================================
+
+\subsection{Cosmic-Ray Neutron Sensing}
+
+The Cosmic-Ray Neutron Sensing (CRNS) method exploits the natural
+flux of epithermal neutrons produced when high-energy cosmic-ray
+particles interact with the Earth's atmosphere and surface
+\citep{zreda2012}.
+Secondary neutrons that reach the ground are moderated primarily by
+hydrogen-bearing substances; liquid soil water is by far the largest
+and most variable hydrogen pool in most natural environments.
+A stationary CRNS probe counts epithermal neutrons continuously, and
+the count rate $N$ is inversely related to the volumetric soil moisture
+$\thetav$ over an area roughly $\sim$\SI{100}{\metre} in radius and
+$\sim$\SI{10}{\centi\metre} in depth \citep{desilets2010, kohli2015}.
+
+This footprint is orders of magnitude larger than a conventional
+point-scale TDR or FDR sensor yet smaller than remote-sensing products,
+making CRNS uniquely suited to bridge the gap between in-situ
+hydrology and satellite observations.
+The technique is now established globally through networks such as
+COSMOS \citep{zreda2012} and TERENO, and is increasingly used for
+irrigation scheduling, drought monitoring, and land-surface model
+validation.
+
+\subsection{The Need for Pre-Installation Site Characterisation}
+
+A CRNS measurement is not simply a count of neutrons: it is the
+result of many simultaneous physical effects that must be corrected
+before soil moisture can be retrieved.
+Some corrections are \emph{operational} — they must be applied to
+each measurement epoch and require ancillary meteorological data
+(barometric pressure, atmospheric humidity, incoming cosmic-ray
+intensity monitor).
+Others are \emph{site-specific constants} that can be determined
+once, before installation:
+
+\begin{itemize}[nosep]
+  \item \textbf{Topographic correction} $\kT$: departures from a
+        flat reference change the soil volume seen by the probe.
+        A sensor on a ridge sees less soil than expected; one at the
+        bottom of a valley may see more.
+
+  \item \textbf{Muon field-of-view correction} $\kM$: high-energy
+        muons (which produce part of the secondary-neutron flux) are
+        blocked by surrounding terrain above the horizon, reducing the
+        effective production rate.
+
+  \item \textbf{Land-use/land-cover correction} $\kL$: water in
+        vegetation, roads, buildings, or standing water within the
+        footprint contributes to neutron moderation and must be
+        accounted for.
+
+  \item \textbf{Soil hydrogen inventory}: clay-mineral lattice water
+        ($\lw$), soil organic carbon (SOC), and bulk density ($\rho_b$)
+        set the background hydrogen level against which liquid water
+        is detected.
+\end{itemize}
+
+Without these corrections, $\Nzero$ — the calibration constant of
+the Desilets inversion — is biased, and all subsequent soil moisture
+estimates carry a systematic error.
+Pre-installation site characterisation is therefore a prerequisite
+for accurate, quantitative CRNS measurements.
+
+\subsection{Existing Tools and Gaps}
+
+Several components of CRNS data processing are available as standalone
+libraries or web services (e.g.\ the \texttt{crnpy} Python package for
+operational corrections, the COSMOS data portal).
+However, no openly available, integrated tool exists that:
+(i)~downloads all relevant datasets automatically from global open
+sources,
+(ii)~computes all site-specific correction factors with physically
+consistent methods,
+(iii)~characterises climate, vegetation, soil, geology, and snow
+cover for a given location, and
+(iv)~produces a ready-to-use calibration curve and sampling plan.
+
+\subsection{Scope of This Document}
+
+This technical note describes the \emph{CRNS Site Characterization
+Pipeline} (\texttt{crns-sitechar}), a Python~3 tool that addresses the
+gap above.
+Section~\ref{sec:theory} presents the theoretical framework.
+Section~\ref{sec:data} summarises all data sources.
+Section~\ref{sec:methods} describes the computational methods.
+Section~\ref{sec:example} shows a worked example.
+Section~\ref{sec:limits} discusses limitations and uncertainties.
+Section~\ref{sec:conclusions} concludes.

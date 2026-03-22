@@ -1,0 +1,132 @@
+% ============================================================
+\section{Limitations and Uncertainties}
+\label{sec:limits}
+% ============================================================
+
+\subsection{DEM Resolution}
+
+The 30-m Copernicus DEM GLO-30 is adequate for computing $\kT$ and
+$\kM$ at most CRNS sites, where the footprint radius exceeds
+\SI{100}{m}.
+However, features smaller than $\sim$60 m (two pixels) are not
+resolved: narrow gullies, embankments, road cuts, and individual
+buildings may be missed.
+In complex built or agricultural terrain, a higher-resolution LiDAR
+DEM (1–5 m) is recommended.
+The ray-casting algorithm accepts any DEM; swapping the 30-m tile
+for a LiDAR product requires only a change in the download module.
+
+The horizon-scan algorithm is limited to azimuths sampled at $5^\circ$
+intervals (72 directions).
+Narrow topographic gaps (e.g.\ a mountain pass at $4^\circ$ width)
+between two blocking ridges may be missed.
+Increasing $N_\phi$ reduces this error at the cost of proportionally
+more CPU time.
+
+\subsection{LULC Classification}
+
+The ESA WorldCover 2021 product has a reported overall accuracy of
+$\sim$75\% at the 10-m pixel level.
+Classification errors in the heterogeneous environments common to
+CRNS sites (forest edges, rice paddies, urban green space) can
+propagate directly into $\kL$.
+A 10\% misclassification of forest/grassland pixels corresponds to a
+$\Delta\kL \approx 0.06$ error, translating to a soil-moisture bias
+of approximately $\SI{0.006}{\cubic\metre\per\cubic\metre}$.
+
+The $f_H$ values in Table~\ref{tab:fH} are literature means;
+actual vegetation water content varies with phenology and rainfall.
+For precise calibration, site-specific leaf water content measurements
+at the time of calibration are preferable.
+
+\subsection{Soil Properties}
+
+SoilGrids 2.0 provides 90th-percentile uncertainty maps alongside
+its predictions.
+Bulk density $\rho_b$ and clay fraction have typical uncertainties
+of $\pm 0.1$ g/cm$^3$ and $\pm 5$ g/kg respectively at the
+250-m resolution.
+These propagate into $\lw$ and $\zzz$:
+\begin{align*}
+  \delta\lw   &\approx 0.097\,\delta f_\mathrm{clay} \sim 0.005 \text{ g/g},\\
+  \delta\zzz  &\approx \frac{8.3}{\rho_b^2 (0.0564+\thetav+\lw)}\,\delta\rho_b
+               \sim \SI{2}{cm}.
+\end{align*}
+The SoilGrids uncertainty is a spatial mean at 250 m; real local
+variability, especially in organic-rich or heterogeneous soils, can
+be larger.
+In-situ soil sampling at the calibration rings (Sec.~\ref{sec:methods:sampling})
+remains the gold standard for $\rho_b$ and clay determination.
+
+\subsection{Lattice Water Estimate}
+
+Equation~\eqref{eq:lw_clay} is an empirical fit across a global
+soil database.
+For soils dominated by 1:1 clays (kaolinite, halloysite) the
+coefficient 0.097 may overestimate $\lw$ by 20–30\%, whereas for
+2:1 swelling clays (smectite, montmorillonite) the same equation
+may underestimate it.
+Geological characterisation (Sec.~\ref{sec:methods:sampling}) provides
+a qualitative flag when the site lithology suggests an unusual
+clay mineralogy.
+
+\subsection{Atmospheric Corrections}
+
+The ERA5-derived $\rho_{WV}$ climatology has a spatial resolution
+of $\sim$30 km and may not capture local valley inversions, sea-breeze
+effects, or orographic enhancement of humidity.
+For sites with strong mesoscale meteorological forcing, on-site
+humidity measurements are recommended for operational $f_{WV}$ correction.
+
+The SWE estimate uses a fixed snow density $\rho_\mathrm{snow} =
+\SI{250}{\kilo\gram\per\cubic\metre}$.
+Fresh snow and densified spring snowpack can deviate by
+$\pm\SI{100}{\kilo\gram\per\cubic\metre}$, introducing a 40\%
+uncertainty in SWE.
+This affects only the seasonal operability assessment (month of
+$\mathrm{SWE} > \SI{150}{mm}$) and not the soil-moisture retrievals.
+
+\subsection{Geological Data}
+
+The Macrostrat API provides a qualitative, reconnaissance-level
+geological characterisation.
+At some sites — particularly in data-sparse regions (parts of Africa,
+Central Asia, Antarctica) — no unit may be returned, and the
+fallback is a ``not available'' flag.
+Hydrogeological properties (fracturing, karst porosity, perched
+water tables) cannot be retrieved and must be assessed through
+field investigation.
+
+\subsection{Geomagnetic Rigidity}
+
+The rigidity cutoff $R_c$ from the Smart \& Shea (2019) tables
+carries an uncertainty of $\sim 0.1$ GV \citep{smart2019}, which
+translates to $\Delta f_{R_c} \approx 0.7\%$.
+This is typically the smallest uncertainty in the $N_0$ chain and
+can be neglected in most applications.
+
+\subsection{Combined Uncertainty on \texorpdfstring{$N_0$}{N0}}
+
+Assuming the dominant sources are independent and normally
+distributed, the relative uncertainty on $N_0$ is approximately
+\begin{equation}
+  \frac{\sigma_{N_0}}{N_0} \approx
+    \sqrt{\left(\frac{\sigma_{\kT}}{\kT}\right)^2
+        + \left(\frac{\sigma_{\kM}}{\kM}\right)^2
+        + \left(\frac{\sigma_{\kL}}{\kL}\right)^2
+        + \left(\frac{\sigma_{\lw}}{\lw + a_2}\right)^2
+    }.
+  \label{eq:N0_uncertainty}
+\end{equation}
+For the Italian Alps example, a rough budget gives:
+$\sigma_{\kT}/\kT \approx 1\%$ (DEM resolution),
+$\sigma_{\kM}/\kM \approx 0.2\%$ (horizon sampling),
+$\sigma_{\kL}/\kL \approx 4\%$ (LULC classification + $f_H$),
+$\sigma_{\lw}/(\lw+a_2) \approx 3\%$ (SoilGrids clay uncertainty).
+This gives $\sigma_{N_0}/N_0 \approx 5\%$, corresponding to a
+soil-moisture uncertainty of roughly
+$\SI{0.015}{\cubic\metre\per\cubic\metre}$ at
+$\thetav = \SI{0.20}{\cubic\metre\per\cubic\metre}$.
+This is comparable to the precision of a single calibration
+measurement and underscores the value of the site characterisation
+workflow.
