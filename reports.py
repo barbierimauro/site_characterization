@@ -4,6 +4,7 @@
 
 import numpy as np
 from kappa_topo_3d      import report_kappa_3d
+from lulc               import report_lulc
 from site_fluxes        import report_site_fluxes, report_desilets_curve
 from site_climate       import report_site_climate, report_power_budget
 from terrain_indices    import report_twi, report_thermal_index
@@ -128,6 +129,10 @@ def write_report(path, params, results):
 
     h("SNOW COVER — MODIS MOD10A1")
     s(report_snow_cover(results['snow']))
+    s()
+
+    h("LULC — LAND USE / LAND COVER")
+    s(report_lulc(results['lulc']))
     s()
 
     h("OUTPUT FILES — DESCRIPTION")

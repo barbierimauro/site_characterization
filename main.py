@@ -93,6 +93,7 @@ from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
                    plot_climate, plot_soil, plot_thermal, plot_twi,
                    plot_kappa_budget, plot_water)
 from vegetation_plots    import plot_seasonal_cycles, plot_timeseries, plot_maps
+from lulc import get_lulc, report_lulc, plot_lulc_worldcover, plot_lulc_osm
 from reports import write_report
 
 try:
@@ -630,8 +631,19 @@ def main():
     snow = get_snow_cover(LAT, LON, cache_dir=_OUT)
     print(report_snow_cover(snow))
 
-    # 14 — Neutron FOV per-azimuth
-    print("\n[14] Computing neutron per-azimuth r_eff ...")
+    # 14 — LULC (Land Use / Land Cover)
+    print("\n[14] Computing LULC kappa (WorldCover + OSM) ...")
+    lulc_res = get_lulc(
+        LAT, LON,
+        dx_grid, dy_grid, dist_grid,
+        r86,
+        cache_dir=_OUT,
+        osm_radius_m=int(r86 * 1.5),
+        verbose=True)
+    print(report_lulc(lulc_res))
+
+    # 15 — Neutron FOV per-azimuth
+    print("\n[15] Computing neutron per-azimuth r_eff ...")
     az_neutron, overlap_az, deficit_az = compute_neutron_fov(
         elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86,
         AZIMUTH_STEP_DEG, DEM_RADIUS_M)
@@ -668,6 +680,7 @@ def main():
         thermal=thermal,
         veg=veg,
         snow=snow,
+        lulc=lulc_res,
         power_budget=power_budget,
         desilets_curve=desilets_curve,
         history=[],   # no iteration history with cell-summation method
@@ -682,11 +695,11 @@ def main():
 
     # 16 — Report
     rpt = _outpath("crns_report.txt")
-    print(f"\n[16] Writing report -> {rpt}")
+    print(f"\n[17] Writing report -> {rpt}")
     print(write_report(rpt, params, results))
 
-    # 17 — Plots
-    print("[17] Generating plots ...")
+    # 18 — Plots
+    print("[18] Generating plots ...")
     plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
               results, _outpath("crns_topo_main.png"),
               lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
@@ -718,6 +731,10 @@ def main():
                     site_name=NAME)
     plot_maps(veg, dx_grid, dy_grid, dist_grid, r86,
               _outpath("crns_veg_maps.png"), site_name=NAME)
+    plot_lulc_worldcover(lulc_res, dx_grid, dy_grid, dist_grid,
+                         _outpath("crns_lulc_worldcover.png"), site_name=NAME)
+    plot_lulc_osm(lulc_res, _outpath("crns_lulc_osm.png"),
+                  site_name=NAME, map_radius_m=int(r86 * 1.5))
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")

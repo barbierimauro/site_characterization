@@ -11,7 +11,12 @@ Email       : mauro.barbieri@pm.me
 
 import os
 import hashlib
+import json
+import gzip
+import warnings
 import numpy as np
+
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # ---------------------------------------------------------------------------
 # WorldCover — classi e parametri fisici
@@ -144,11 +149,6 @@ Affiliation :
 Email       : mauro.barbieri@pm.me
 """
 
-import os
-import numpy as np
-from lulc_constants import (WC_CLASSES, WC_NODATA, WC_BASELINE_FH,
-                              PC_STAC_URL, site_hash,
-                              weight_radial, pixel_size)
 
 
 # ---------------------------------------------------------------------------
@@ -319,14 +319,6 @@ Affiliation :
 Email       : mauro.barbieri@pm.me
 """
 
-import os
-import json
-import gzip
-import hashlib
-import numpy as np
-from lulc_constants import (OSM_FH, HIGHWAY_WIDTH, OSM_COLORS,
-                              WC_BASELINE_FH, site_hash,
-                              weight_radial, pixel_size)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
@@ -653,17 +645,6 @@ Affiliation :
 Email       : mauro.barbieri@pm.me
 """
 
-import os
-import numpy as np
-import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-from lulc_constants import WC_CLASSES, OSM_COLORS
-from lulc_worldcover import (load_wc_cache, save_wc_cache,
-                               download_worldcover,
-                               resample_wc_to_dem, compute_wc_kappa)
-from lulc_osm import (load_osm_cache, save_osm_cache,
-                       download_osm, compute_osm_kappa)
 
 
 # ---------------------------------------------------------------------------
