@@ -31,10 +31,8 @@ import os
 import json
 import hashlib
 import warnings
-import threading
 import numpy as np
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -509,9 +507,10 @@ def get_vegetation_indices(
         print(f"  {len(items_ls)} new Landsat scenes to download",
               flush=True)
 
-    # --- Download parallelo ---
-    lock = threading.Lock()
-    new_ls_scenes = []
+    # --- Download sequenziale a batch per evitare OOM ---
+    # ThreadPoolExecutor creava tutti i future in memoria simultaneamente;
+    # qui processiamo una scena alla volta e salviamo la cache ogni BATCH_SIZE
+    # scene valide, così un crash non perde tutto il lavoro già fatto.
 
     def _proc_ls(item):
         import planetary_computer as _pc
@@ -523,57 +522,55 @@ def get_vegetation_indices(
             dt_obj = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
         except Exception:
             return None
-
         signed  = _pc.sign(item)
-        indices = _read_landsat_scene(
-            signed, lat, lon, r86, dx_grid, dy_grid)
+        indices = _read_landsat_scene(signed, lat, lon, r86, dx_grid, dy_grid)
         if indices is None:
             return None
-
         n_clear = int(np.nansum(indices["clear"] > 0.5))
         if fp_pixels > 0 and n_clear / fp_pixels < min_clear_fraction:
             return None
-
         scene_vals = {
-            idx: _weighted_mean_fp(indices[idx])
-            for idx in ["ndvi","evi","ndwi","fcover"]
-            if idx in indices
+            k: _weighted_mean_fp(indices[k])
+            for k in ["ndvi","evi","ndwi","fcover"] if k in indices
         }
         return dt_obj, scene_vals, n_clear, indices
 
-    done = [0]
+    LANDSAT_BATCH = 25
+    new_ls_scenes = []
+    latest_ls = {}   # idx -> (val, date_str, map_arr) — solo l'ultima scena
     n_ls = len(items_ls)
-    latest_ls = {}   # idx -> (val, date_str, map_arr)
+    done = 0
 
-    with ThreadPoolExecutor(max_workers=N_WORKERS) as pool:
-        futures = {pool.submit(_proc_ls, it): it for it in items_ls}
-        for fut in as_completed(futures):
-            res = fut.result()
-            done[0] += 1
-            if verbose and done[0] % 50 == 0:
-                print(f"  Landsat: {done[0]}/{n_ls} processed", flush=True)
-            if res is None:
-                continue
-            dt_obj, scene_vals, n_clear, indices = res
-            date_str = dt_obj.date().isoformat()
-            row = {"date": date_str,
-                   "year": dt_obj.year,
-                   "month": dt_obj.month,
-                   "n_clear": n_clear}
-            for idx in ["ndvi","evi","ndwi","fcover"]:
-                v = scene_vals.get(idx, np.nan)
-                row[idx] = float(v) if (v is not None
-                                        and not np.isnan(v)) else None
-            with lock:
-                new_ls_scenes.append(row)
-                # Aggiorna latest map
-                for idx in ["ndvi","evi","ndwi","fcover"]:
-                    v = row.get(idx)
-                    if v is not None:
-                        prev = latest_ls.get(idx)
-                        if prev is None or date_str > prev[1]:
-                            latest_ls[idx] = (v, date_str,
-                                              indices.get(idx))
+    for item in items_ls:
+        res = _proc_ls(item)
+        done += 1
+        if res is None:
+            continue
+        dt_obj, scene_vals, n_clear, indices = res
+        date_str = dt_obj.date().isoformat()
+        row = {"date": date_str, "year": dt_obj.year,
+               "month": dt_obj.month, "n_clear": n_clear}
+        for idx in ["ndvi","evi","ndwi","fcover"]:
+            v = scene_vals.get(idx, np.nan)
+            row[idx] = float(v) if (v is not None and not np.isnan(v)) else None
+        new_ls_scenes.append(row)
+        for idx in ["ndvi","evi","ndwi","fcover"]:
+            v = row.get(idx)
+            if v is not None:
+                prev = latest_ls.get(idx)
+                if prev is None or date_str > prev[1]:
+                    latest_ls[idx] = (v, date_str, indices.get(idx))
+        del indices   # libera subito le mappe numpy (grandi) dopo l'uso
+
+        # Checkpoint: salva cache ogni LANDSAT_BATCH scene valide
+        if len(new_ls_scenes) % LANDSAT_BATCH == 0:
+            partial = sorted(ls_timeseries + new_ls_scenes,
+                             key=lambda x: x["date"])
+            _save_landsat_cache(cache_dir, lat, lon, r86, landsat_start_year,
+                                partial, partial[-1]["date"])
+            if verbose:
+                print(f"  Landsat checkpoint: {done}/{n_ls} scanned, "
+                      f"{len(new_ls_scenes)} valid, cache saved", flush=True)
 
     # Merge con cache esistente e salva
     ls_timeseries = ls_timeseries + new_ls_scenes
@@ -638,11 +635,12 @@ def get_vegetation_indices(
         print(f"  {len(items_mod)} new MODIS scenes to download", flush=True)
 
     new_mod_scenes = []
-    done_mod = [0]
     n_mod = len(items_mod)
+    done_mod = 0
     mod_latest_val  = None
     mod_latest_date_ = None
     mod_latest_map  = None
+    MODIS_BATCH = 50
 
     def _proc_mod(item):
         import planetary_computer as _pc
@@ -655,8 +653,7 @@ def get_vegetation_indices(
         except Exception:
             return None
         signed  = _pc.sign(item)
-        lai_map = _read_modis_lai_scene(
-            signed, lat, lon, modis_n_pixels)
+        lai_map = _read_modis_lai_scene(signed, lat, lon, modis_n_pixels)
         if lai_map is None:
             return None
         lai_mean = float(np.nanmean(lai_map))
@@ -665,30 +662,37 @@ def get_vegetation_indices(
             return None
         return dt_obj, lai_mean, lai_std, lai_map
 
-    with ThreadPoolExecutor(max_workers=N_WORKERS) as pool:
-        futures = {pool.submit(_proc_mod, it): it for it in items_mod}
-        for fut in as_completed(futures):
-            res = fut.result()
-            done_mod[0] += 1
-            if verbose and done_mod[0] % 200 == 0:
-                print(f"  MODIS: {done_mod[0]}/{n_mod} processed",
-                      flush=True)
-            if res is None:
-                continue
-            dt_obj, lai_mean, lai_std, lai_map = res
-            date_str = dt_obj.date().isoformat()
-            with lock:
-                new_mod_scenes.append({
-                    "date"    : date_str,
-                    "year"    : dt_obj.year,
-                    "month"   : dt_obj.month,
-                    "lai_mean": lai_mean,
-                    "lai_std" : lai_std,
-                })
-                if mod_latest_date_ is None or date_str > mod_latest_date_:
-                    mod_latest_val   = lai_mean
-                    mod_latest_date_ = date_str
-                    mod_latest_map   = lai_map.copy()
+    for item in items_mod:
+        res = _proc_mod(item)
+        done_mod += 1
+        if verbose and done_mod % 100 == 0:
+            print(f"  MODIS: {done_mod}/{n_mod} processed", flush=True)
+        if res is None:
+            continue
+        dt_obj, lai_mean, lai_std, lai_map = res
+        date_str = dt_obj.date().isoformat()
+        new_mod_scenes.append({
+            "date"    : date_str,
+            "year"    : dt_obj.year,
+            "month"   : dt_obj.month,
+            "lai_mean": lai_mean,
+            "lai_std" : lai_std,
+        })
+        if mod_latest_date_ is None or date_str > mod_latest_date_:
+            mod_latest_val   = lai_mean
+            mod_latest_date_ = date_str
+            mod_latest_map   = lai_map.copy()
+        del lai_map   # libera la mappa dopo l'uso
+
+        # Checkpoint ogni MODIS_BATCH scene valide
+        if len(new_mod_scenes) % MODIS_BATCH == 0:
+            partial = sorted(mod_timeseries + new_mod_scenes,
+                             key=lambda x: x["date"])
+            _save_modis_cache(cache_dir, lat, lon, modis_start_year,
+                              partial, partial[-1]["date"])
+            if verbose:
+                print(f"  MODIS checkpoint: {done_mod}/{n_mod} scanned, "
+                      f"{len(new_mod_scenes)} valid, cache saved", flush=True)
 
     mod_timeseries = mod_timeseries + new_mod_scenes
     mod_timeseries.sort(key=lambda x: x["date"])
@@ -932,12 +936,12 @@ def get_snow_cover(
         print(f"  {len(items_snow)} new snow scenes to download", flush=True)
 
     # ------------------------------------------------------------------ #
-    # Download parallelo
+    # Download sequenziale (evita OOM)
     # ------------------------------------------------------------------ #
-    lock           = threading.Lock()
-    new_scenes     = []
-    done           = [0]
-    n_items        = len(items_snow)
+    new_scenes = []
+    done       = 0
+    n_items    = len(items_snow)
+    SNOW_BATCH = 50
 
     def _proc_snow(item):
         import planetary_computer as _pc
@@ -958,24 +962,31 @@ def get_snow_cover(
             return None
         return dt_obj, cover_mean
 
-    with ThreadPoolExecutor(max_workers=N_WORKERS) as pool:
-        futures = {pool.submit(_proc_snow, it): it for it in items_snow}
-        for fut in as_completed(futures):
-            res = fut.result()
-            done[0] += 1
-            if verbose and done[0] % 200 == 0:
-                print(f"  Snow: {done[0]}/{n_items} processed", flush=True)
-            if res is None:
-                continue
-            dt_obj, cover_mean = res
-            date_str = dt_obj.date().isoformat()
-            with lock:
-                new_scenes.append({
-                    "date"           : date_str,
-                    "year"           : dt_obj.year,
-                    "month"          : dt_obj.month,
-                    "snow_cover_pct" : cover_mean,
-                })
+    for item in items_snow:
+        res = _proc_snow(item)
+        done += 1
+        if verbose and done % 100 == 0:
+            print(f"  Snow: {done}/{n_items} processed", flush=True)
+        if res is None:
+            continue
+        dt_obj, cover_mean = res
+        date_str = dt_obj.date().isoformat()
+        new_scenes.append({
+            "date"           : date_str,
+            "year"           : dt_obj.year,
+            "month"          : dt_obj.month,
+            "snow_cover_pct" : cover_mean,
+        })
+
+        # Checkpoint ogni SNOW_BATCH scene valide
+        if len(new_scenes) % SNOW_BATCH == 0:
+            partial = sorted(snow_timeseries + new_scenes,
+                             key=lambda x: x["date"])
+            _save_snow_cache(cache_dir, lat, lon, start_year,
+                             partial, partial[-1]["date"])
+            if verbose:
+                print(f"  Snow checkpoint: {done}/{n_items} scanned, "
+                      f"{len(new_scenes)} valid, cache saved", flush=True)
 
     # ------------------------------------------------------------------ #
     # Merge e salva cache
