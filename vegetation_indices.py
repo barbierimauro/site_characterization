@@ -732,7 +732,7 @@ def get_vegetation_indices(
     _mod_batch_t0 = _mod_t0
 
     def _handle_mod_result(res):
-        nonlocal done_mod, _mod_batch_t0
+        nonlocal done_mod, _mod_batch_t0, mod_latest_val, mod_latest_date_, mod_latest_map
         done_mod += 1
         if res is None:
             return
