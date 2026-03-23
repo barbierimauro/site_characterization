@@ -328,22 +328,20 @@ def _read_landsat_scene(signed_item, lat, lon, r86, dx_grid, dy_grid,
         return None
 
     # ------------------------------------------------------------------ #
-    # Fase 2: legge le 4 bande spettrali IN PARALLELO
+    # Fase 2: legge le 4 bande spettrali SEQUENZIALMENTE
+    # (GDAL non è thread-safe su Windows: multi-thread causa crash silenzioso)
     # ------------------------------------------------------------------ #
-    def _read_one(band):
-        href = signed_item.assets[band].href
+    spectral_bands = ["red", "nir08", "green", "blue"]
+    band_results = {}
+    for _band in spectral_bands:
+        href = signed_item.assets[_band].href
         try:
             with rasterio.open(href) as src:
                 l2, b2, r2, t2 = transform_bounds(wgs84, src.crs, *bbox_wgs84)
                 win2 = from_bounds(l2, b2, r2, t2, transform=src.transform)
-                return band, src.read(1, window=win2)
+                band_results[_band] = src.read(1, window=win2)
         except Exception:
-            return band, None
-
-    spectral_bands = ["red", "nir08", "green", "blue"]
-    with ThreadPoolExecutor(max_workers=4) as _bpool:
-        band_results = dict(_bpool.map(
-            lambda b: _read_one(b), spectral_bands))
+            band_results[_band] = None
 
     if any(v is None for v in band_results.values()):
         return None
@@ -638,7 +636,10 @@ def get_vegetation_indices(
                     pass
             # Processa i risultati completati
             for _f in _done_set:
-                _handle_ls_result(_f.result())
+                try:
+                    _handle_ls_result(_f.result())
+                except Exception as _e:
+                    print(f"  [WARN] Landsat scene error: {_e}", flush=True)
 
     # Merge con cache esistente e salva
     ls_timeseries = ls_timeseries + new_ls_scenes
@@ -786,7 +787,10 @@ def get_vegetation_indices(
                 except StopIteration:
                     pass
             for _f in _done_set:
-                _handle_mod_result(_f.result())
+                try:
+                    _handle_mod_result(_f.result())
+                except Exception as _e:
+                    print(f"  [WARN] MODIS scene error: {_e}", flush=True)
 
     mod_timeseries = mod_timeseries + new_mod_scenes
     mod_timeseries.sort(key=lambda x: x["date"])

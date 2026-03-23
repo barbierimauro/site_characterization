@@ -694,10 +694,15 @@ def main():
 
     # 12 — Vegetation indices (Landsat + MODIS)
     print("\n[12] Fetching vegetation indices (Landsat + MODIS) ...")
-    veg = get_vegetation_indices(
-        LAT, LON, dx_grid, dy_grid, dist_grid, r86,
-        cache_dir=_OUT)
-    print(report_vegetation(veg))
+    try:
+        veg = get_vegetation_indices(
+            LAT, LON, dx_grid, dy_grid, dist_grid, r86,
+            cache_dir=_OUT)
+        print(report_vegetation(veg))
+    except Exception as _veg_e:
+        print(f"   [WARN] Vegetation indices failed: {_veg_e}")
+        import traceback; traceback.print_exc()
+        veg = {"landsat": {}, "modis": {}, "warning": str(_veg_e)}
 
     # 13 — Snow cover (MODIS MOD10A1)
     print("\n[13] Fetching snow cover (MODIS MOD10A1) ...")
