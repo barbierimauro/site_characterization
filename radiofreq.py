@@ -804,3 +804,84 @@ def run_rf_analysis(lat, lon, site_elev_m,
         "site_elev_m"  : site_elev_m,
         "radius_m"     : radius_m,
     }
+
+
+# ---------------------------------------------------------------------------
+# Report testuale
+# ---------------------------------------------------------------------------
+
+def report_rf(rf):
+    """
+    Genera il blocco testuale per la sezione RF del report.
+    rf: dict ritornato da run_rf_analysis()
+    """
+    if rf is None:
+        return "  [non disponibile — RF analysis non eseguita]"
+
+    L = []
+    def s(x=""): L.append(x)
+
+    conn = rf.get("connectivity", {})
+    rfi  = rf.get("rfi", {})
+
+    # --- Connettività cellulare ---
+    s(f"  Raggio analisi : {rf.get('radius_m', 25000)/1000:.0f} km")
+    s(f"  DEM GLO-90     : {rf.get('dem_shape', ('?','?'))}")
+    s()
+
+    s("  A) CONNETTIVITA' CELLULARE (OpenCelliD)")
+    n_cells = conn.get("n_cells_total", 0)
+    s(f"     Celle analizzate : {n_cells}")
+    if n_cells == 0 or not conn.get("has_any", False):
+        w = conn.get("warning", "Nessuna cella trovata.")
+        s(f"     [WARN] {w}")
+    else:
+        s(f"     {'Tecnologia':<8}  {'Copertura':<10}  "
+          f"{'Best Rx [dBm]':<14}  {'Qualità':<8}  Celle")
+        s(f"     {'-'*8}  {'-'*10}  {'-'*14}  {'-'*8}  -----")
+        for tech, info in sorted(conn.get("by_radio", {}).items()):
+            cov  = "SI" if info.get("coverage") else "NO"
+            rx   = info.get("best_rx_dbm", 0.0)
+            qual = info.get("quality", "?")
+            nc   = info.get("n_cells", 0)
+            s(f"     {tech:<8}  {cov:<10}  {rx:>+8.1f} dBm    {qual:<8}  {nc}")
+        best = conn.get("best_overall")
+        if best:
+            s()
+            s(f"     Miglior segnale: {best['radio']}  "
+              f"Rx={best['rx_dbm']:+.1f} dBm  "
+              f"d={best['d_km']:.1f} km  "
+              f"LOS={'si' if best['is_los'] else 'no'}")
+
+    s()
+    s("  B) DISTURBI RF (OSM RFI)")
+    s(f"     Sorgenti trovate : {rfi.get('n_sources', 0)}")
+    s(f"     RFI index        : {rfi.get('rfi_index', 0.0):.1f}/10  "
+      f"livello={rfi.get('rfi_level', '?')}")
+    if rfi.get("warning"):
+        s(f"     [NOTA] {rfi['warning']}")
+
+    by_type = rfi.get("by_type", {})
+    if by_type:
+        s()
+        s(f"     {'Tipo':<20}  {'N':>4}  {'Contrib':>8}  {'Min dist':>9}")
+        s(f"     {'-'*20}  {'-'*4}  {'-'*8}  {'-'*9}")
+        for t, v in sorted(by_type.items(),
+                           key=lambda x: -x[1]["contrib"]):
+            s(f"     {t:<20}  {v['n']:>4}  "
+              f"{v['contrib']:>8.2f}  "
+              f"{v['min_d_km']:>6.1f} km")
+
+    top_src = rfi.get("sources", [])[:5]
+    if top_src:
+        s()
+        s("     Top 5 sorgenti per contributo:")
+        for src in top_src:
+            tags_str = ", ".join(f"{k}={v}"
+                                 for k, v in src.get("tags", {}).items())
+            s(f"       {src['type']:<20}  "
+              f"d={src['d_km']:.2f} km  "
+              f"contrib={src['contrib']:.3f}  "
+              f"{tags_str}")
+
+    return "\n".join(L)

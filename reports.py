@@ -13,6 +13,7 @@ from vegetation_indices  import report_snow_cover
 from crns_corrections   import report_crns_corrections
 from geology            import report_geology
 from sampling_plan      import report_sampling_plan
+from radiofreq          import report_rf
 
 
 def write_report(path, params, results):
@@ -160,6 +161,10 @@ def write_report(path, params, results):
         s(report_crns_corrections(results['crns_corrections'], z86_cm=z86))
     else:
         s("  [non disponibile]")
+    s()
+
+    h("RF ANALYSIS (OpenCelliD + OSM RFI)")
+    s(report_rf(results.get("rf")))
     s()
 
     h("OPTIMAL SOIL SAMPLING PLAN")
