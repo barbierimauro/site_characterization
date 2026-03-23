@@ -48,12 +48,14 @@ LAT = 45.338058
 
 #================
 
-NAME = "output"
-#Malga Fadner
-LON = 11.861398
-LAT = 46.925545
+NAME = "pradazzo"
+#Cima Pradazzo
+LON = 11.822478        # decimal degrees, WGS84
+LAT = 46.355945          # decimal degrees, WGS84
 
-
+NAME = "ELHAMAN"
+LON = 30.727636
+LAT = 29.234043
 
 SENSOR_HEIGHT_M = 2.0         # sensor height above ground (m)
 RHO_BULK        = 1.4         # soil bulk density (g/cm3)
