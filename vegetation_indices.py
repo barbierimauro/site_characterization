@@ -38,6 +38,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
+# Limit GDAL in-memory cache to 128 MB to avoid OOM crashes under WSL
+# when downloading many COG scenes in parallel.  Must be set before any
+# rasterio / GDAL import.
+os.environ.setdefault("GDAL_CACHEMAX", "128")
+os.environ.setdefault("CPL_VSIL_CURL_CHUNK_SIZE", "524288")   # 512 KB chunks
+
 # ---------------------------------------------------------------------------
 # Costanti fisiche
 # ---------------------------------------------------------------------------
@@ -64,7 +70,7 @@ MODIS_START_YEAR   = 2013
 
 PC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
-N_WORKERS = 8   # thread paralleli per download
+N_WORKERS = 2   # thread paralleli per download (>2 causa OOM sotto WSL)
 
 
 # ---------------------------------------------------------------------------
