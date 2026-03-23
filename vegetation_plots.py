@@ -352,6 +352,9 @@ def plot_maps(res, dx_grid, dy_grid, dist_grid, r86, path,
             ax.plot(0, 0, "r^", ms=10, zorder=5, label="Sensor")
 
             cur_date = res.get(f"landsat_{idx_name}_current_date", "?")
+            clip = r86 * 1.3
+            ax.set_xlim(-clip, clip)
+            ax.set_ylim(-clip, clip)
             ax.set_title(f"{ist['label']}  (Landsat 30m)\n"
                          f"Most recent: {cur_date}", fontsize=11)
             ax.set_xlabel("Easting offset (m)")

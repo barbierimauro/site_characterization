@@ -856,11 +856,13 @@ def plot_lulc_worldcover(res, dx_grid, dy_grid, dist_grid,
                               facecolor="white")
 
     ax = axes[0]
+    clip = r86 * 1.3
     ax.pcolormesh(dx_grid, dy_grid, wc_dem,
                   cmap=cmap, norm=norm, shading="auto")
     ax.plot(cx, cy, "k--", lw=2, label=f"r86={r86:.0f}m")
     ax.plot(0, 0, "r^", ms=12, zorder=5, label="Sensor")
-    ax.set_aspect("equal")
+    ax.set_xlim(-clip, clip)
+    ax.set_ylim(-clip, clip)
     ax.set_xlabel("Easting offset (m)")
     ax.set_ylabel("Northing offset (m)")
     ax.set_title(f"WorldCover 10m — footprint\n"
