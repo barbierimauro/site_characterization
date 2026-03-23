@@ -114,7 +114,7 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
             f"{lat:.4f}N {lon:.4f}E  |  "
             f"Alt={results['sensor_alt']:.0f}m  P={results['pressure']:.1f}hPa",
             fontsize=14, fontweight="bold", y=0.99)
-        fig.savefig(path, dpi=200, bbox_inches="tight")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -234,7 +234,7 @@ def plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86_cm,
 
         fig.suptitle("CRNS Neutron Footprint — Soil Volume Loss by Direction",
                      fontsize=14, fontweight="bold")
-        fig.savefig(path, dpi=200, bbox_inches="tight")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -285,7 +285,7 @@ def plot_horizon(azimuths, horizon, kappa_muon, per_az_muon, path):
 
         fig.suptitle("Horizon Angles & Muon FOV Correction",
                      fontsize=14, fontweight="bold", y=1.01)
-        fig.savefig(path, dpi=200, bbox_inches="tight")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -380,7 +380,7 @@ def plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
             f"Detailed FOV  |  {lat:.4f}N {lon:.4f}E  |  "
             f"Alt={sensor_alt:.0f}m  r86={r86:.0f}m",
             fontsize=14, fontweight="bold")
-        fig.savefig(path, dpi=200, bbox_inches="tight")
+        fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -512,7 +512,7 @@ def plot_climate(site_climate, thermal, path, lat, lon, sensor_alt):
             f"Site Climate Summary  |  {lat:.4f}N {lon:.4f}E  |  "
             f"Alt={sensor_alt:.0f} m  (PVGIS TMY + ERA5 Open-Meteo)",
             fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=200, bbox_inches='tight')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -630,7 +630,7 @@ def plot_soil(soil, path, lat, lon):
         fig.suptitle(
             f"Soil Characterization  |  {lat:.4f}N {lon:.4f}E  |  SoilGrids v2.0 ISRIC 250 m",
             fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=200, bbox_inches='tight')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -743,7 +743,7 @@ def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
         fig.suptitle(
             f"Thermal Correction  |  {lat:.4f}N {lon:.4f}E  |  Alt={sensor_alt:.0f} m",
             fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=200, bbox_inches='tight')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -854,7 +854,7 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
 
         fig.suptitle(f"Topographic Wetness Index  |  {lat:.4f}N {lon:.4f}E",
                      fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=200, bbox_inches='tight')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -946,7 +946,7 @@ def plot_kappa_budget(results, path, lat, lon):
 
         fig.suptitle(f"\u03ba Budget & Expected Fluxes  |  {lat:.4f}N {lon:.4f}E",
                      fontsize=14, fontweight='bold')
-        fig.savefig(path, dpi=200, bbox_inches='tight')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -1085,6 +1085,6 @@ def plot_water(water, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
             f"JRC Surface Water Correction (\u03b7)  |  {lat:.4f}N {lon:.4f}E  |  "
             f"JRC Global Surface Water v1.4 (Pekel 2016)",
             fontsize=14, fontweight='bold')
-        fig.savefig(path, dpi=200, bbox_inches='tight')
+        fig.savefig(path, dpi=150, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")

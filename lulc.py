@@ -994,6 +994,6 @@ def plot_lulc_osm(res, path, site_name="", map_radius_m=500):
         ax.axvline(d_val, color="white", lw=0.4, alpha=0.5, zorder=1)
         ax.axhline(d_val, color="white", lw=0.4, alpha=0.5, zorder=1)
 
-    fig.savefig(path, dpi=200, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
