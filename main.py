@@ -48,10 +48,10 @@ LAT = 45.338058
 
 #================
 
-NAME = "RAVALLES"
-# RA VALLES
-LON             = 12.077010   # decimal degrees WGS84
-LAT             = 46.548503   # decimal degrees WGS84
+NAME = "output"
+#Malga Fadner
+LON = 11.861398
+LAT = 46.925545
 
 
 
