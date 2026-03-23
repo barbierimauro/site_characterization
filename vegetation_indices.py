@@ -31,6 +31,7 @@ import os
 import json
 import hashlib
 import itertools
+import time
 import warnings
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -575,9 +576,11 @@ def get_vegetation_indices(
     latest_ls = {}   # idx -> (val, date_str, map_arr) — solo l'ultima scena
     n_ls = len(items_ls)
     done = 0
+    _ls_t0 = time.perf_counter()        # inizio download Landsat
+    _ls_batch_t0 = _ls_t0               # inizio batch corrente
 
     def _handle_ls_result(res):
-        nonlocal done
+        nonlocal done, _ls_batch_t0
         done += 1
         if res is None:
             return
@@ -604,8 +607,18 @@ def get_vegetation_indices(
             _save_landsat_cache(cache_dir, lat, lon, r86, landsat_start_year,
                                 partial, partial[-1]["date"])
             if verbose:
-                print(f"  Landsat checkpoint: {done}/{n_ls} scanned, "
-                      f"{len(new_ls_scenes)} valid, cache saved", flush=True)
+                now        = time.perf_counter()
+                batch_s    = now - _ls_batch_t0
+                elapsed_s  = now - _ls_t0
+                rate       = done / elapsed_s if elapsed_s > 0 else 0
+                remaining  = (n_ls - done) / rate if rate > 0 else 0
+                print(
+                    f"  Landsat checkpoint: {done}/{n_ls} scanned, "
+                    f"{len(new_ls_scenes)} valid  |  "
+                    f"batch {batch_s:.0f}s  elapsed {elapsed_s:.0f}s  "
+                    f"rate {rate*60:.1f} scene/min  ETA {remaining:.0f}s",
+                    flush=True)
+                _ls_batch_t0 = now
 
     with ThreadPoolExecutor(max_workers=N_WORKERS) as _pool:
         _iter = iter(items_ls)
@@ -715,11 +728,12 @@ def get_vegetation_indices(
             return None
         return dt_obj, lai_mean, lai_std, lai_map
 
+    _mod_t0 = time.perf_counter()
+    _mod_batch_t0 = _mod_t0
+
     def _handle_mod_result(res):
-        nonlocal done_mod
+        nonlocal done_mod, _mod_batch_t0
         done_mod += 1
-        if verbose and done_mod % 100 == 0:
-            print(f"  MODIS: {done_mod}/{n_mod} processed", flush=True)
         if res is None:
             return
         dt_obj, lai_mean, lai_std, lai_map = res
@@ -744,8 +758,18 @@ def get_vegetation_indices(
             _save_modis_cache(cache_dir, lat, lon, modis_start_year,
                               partial, partial[-1]["date"])
             if verbose:
-                print(f"  MODIS checkpoint: {done_mod}/{n_mod} scanned, "
-                      f"{len(new_mod_scenes)} valid, cache saved", flush=True)
+                now       = time.perf_counter()
+                batch_s   = now - _mod_batch_t0
+                elapsed_s = now - _mod_t0
+                rate      = done_mod / elapsed_s if elapsed_s > 0 else 0
+                remaining = (n_mod - done_mod) / rate if rate > 0 else 0
+                print(
+                    f"  MODIS checkpoint: {done_mod}/{n_mod} scanned, "
+                    f"{len(new_mod_scenes)} valid  |  "
+                    f"batch {batch_s:.0f}s  elapsed {elapsed_s:.0f}s  "
+                    f"rate {rate*60:.1f} scene/min  ETA {remaining:.0f}s",
+                    flush=True)
+                _mod_batch_t0 = now
 
     with ThreadPoolExecutor(max_workers=N_WORKERS) as _pool:
         _iter = iter(items_mod)
@@ -1006,10 +1030,12 @@ def get_snow_cover(
     # ------------------------------------------------------------------ #
     # Download sequenziale (evita OOM)
     # ------------------------------------------------------------------ #
-    new_scenes = []
-    done       = 0
-    n_items    = len(items_snow)
-    SNOW_BATCH = 50
+    new_scenes    = []
+    done          = 0
+    n_items       = len(items_snow)
+    SNOW_BATCH    = 50
+    _snow_t0      = time.perf_counter()
+    _snow_batch_t0= _snow_t0
 
     def _proc_snow(item):
         import planetary_computer as _pc
@@ -1033,8 +1059,6 @@ def get_snow_cover(
     for item in items_snow:
         res = _proc_snow(item)
         done += 1
-        if verbose and done % 100 == 0:
-            print(f"  Snow: {done}/{n_items} processed", flush=True)
         if res is None:
             continue
         dt_obj, cover_mean = res
@@ -1053,8 +1077,18 @@ def get_snow_cover(
             _save_snow_cache(cache_dir, lat, lon, start_year,
                              partial, partial[-1]["date"])
             if verbose:
-                print(f"  Snow checkpoint: {done}/{n_items} scanned, "
-                      f"{len(new_scenes)} valid, cache saved", flush=True)
+                now        = time.perf_counter()
+                batch_s    = now - _snow_batch_t0
+                elapsed_s  = now - _snow_t0
+                rate       = done / elapsed_s if elapsed_s > 0 else 0
+                remaining  = (n_items - done) / rate if rate > 0 else 0
+                print(
+                    f"  Snow checkpoint: {done}/{n_items} scanned, "
+                    f"{len(new_scenes)} valid  |  "
+                    f"batch {batch_s:.0f}s  elapsed {elapsed_s:.0f}s  "
+                    f"rate {rate*60:.1f} scene/min  ETA {remaining:.0f}s",
+                    flush=True)
+                _snow_batch_t0 = now
 
     # ------------------------------------------------------------------ #
     # Merge e salva cache
