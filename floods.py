@@ -614,24 +614,7 @@ def _extract_osm_waterways(elements, site_lat, site_lon,
             "name": tags.get("name",""),
         })
     return segs
-    
-    
-"""
-flood_output.py
-===============
-Report testuale e 3 mappe per i risultati di compute_flood():
-  1. Mappa topografica con reticolo idrografico
-  2. Mappa HAND (Height Above Nearest Drainage)
-  3. Mappa FRI (Flood Risk Index) + classi suscettibilità
 
-Author      : MB
-Affiliation :
-Email       : mauro.barbieri@pm.me
-"""
-
-
-FLOOD_LABELS = ["Very High", "High", "Moderate", "Low", "Very Low"]
-FLOOD_COLORS = ["#023858", "#0570b0", "#74a9cf", "#bdc9e1", "#f1eef6"]
 
 WATERWAY_STYLE = {
     "river"        : {"color": "#2166ac", "lw": 2.0},
@@ -753,7 +736,7 @@ def report_flood(res, site_name=""):
 # ---------------------------------------------------------------------------
 
 def plot_topo_network(res, path, site_name="",
-                       hillshade=True):
+                       hillshade=True, r86_m=150.0):
     """
     Mappa topografica (hillshade + contour) con:
       - Reticolo idrografico estratto dal DEM (blu tenue)
@@ -816,8 +799,9 @@ def plot_topo_network(res, path, site_name="",
             label=f"GLO-30 inner (r={r_in}km)")
 
     # Cerchio r86
-    cx86, cy86 = _circle(0.15)
-    ax.plot(cx86, cy86, "r--", lw=1.8, label="r86 ≈ 150m")
+    r86_km = r86_m / 1000.0
+    cx86, cy86 = _circle(r86_km)
+    ax.plot(cx86, cy86, "r--", lw=1.8, label=f"r86={r86_m:.0f}m")
 
     # Sensore
     ax.plot(0, 0, "r^", ms=12, zorder=8, label="Sensor")
@@ -854,7 +838,7 @@ def plot_topo_network(res, path, site_name="",
     ax.grid(True, alpha=0.2, lw=0.5)
 
     fig.tight_layout()
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -863,7 +847,7 @@ def plot_topo_network(res, path, site_name="",
 # Mappa 2: HAND
 # ---------------------------------------------------------------------------
 
-def plot_hand(res, path, site_name=""):
+def plot_hand(res, path, site_name="", r86_m=150.0):
     """
     Mappa HAND con:
       - Colorscale logaritmica (0m=very high risk, 20m+=safe)
@@ -923,7 +907,8 @@ def plot_hand(res, path, site_name=""):
     _overlay_osm_waterways(ax, res, alpha=0.9)
 
     # Sensore + r86
-    cx86, cy86 = _circle(0.15)
+    r86_km = r86_m / 1000.0
+    cx86, cy86 = _circle(r86_km)
     ax.plot(cx86, cy86, "k--", lw=1.5)
     ax.plot(0, 0, "k^", ms=12, zorder=8)
     hs  = res["hand_at_sensor"]
@@ -933,6 +918,10 @@ def plot_hand(res, path, site_name=""):
                 arrowprops=dict(arrowstyle="->",
                                 color="black"))
 
+    r_ext_x = float(np.max(np.abs(DX))) * 1.02
+    r_ext_y = float(np.max(np.abs(DY))) * 1.02
+    ax.set_xlim(-r_ext_x, r_ext_x)
+    ax.set_ylim(-r_ext_y, r_ext_y)
     ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
@@ -974,7 +963,7 @@ def plot_hand(res, path, site_name=""):
                  f"{res['site_lon']:.4f}E",
                  fontsize=13, fontweight="bold")
     fig.tight_layout()
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -983,7 +972,7 @@ def plot_hand(res, path, site_name=""):
 # Mappa 3: FRI + classi suscettibilità
 # ---------------------------------------------------------------------------
 
-def plot_fri(res, path, site_name=""):
+def plot_fri(res, path, site_name="", r86_m=150.0):
     """
     Due pannelli:
       Left : mappa FRI [0-1] con classi suscettibilità come overlay
@@ -1000,6 +989,11 @@ def plot_fri(res, path, site_name=""):
     susc   = res["susc_map"].astype(float)
     susc[np.isnan(res["hand"])] = np.nan
 
+    r86_km  = r86_m / 1000.0
+    r_ext_x = float(np.max(np.abs(DX))) * 1.02
+    r_ext_y = float(np.max(np.abs(DY))) * 1.02
+    cx86, cy86 = _circle(r86_km)
+
     fig, axes = plt.subplots(1, 3, figsize=(22, 8),
                               facecolor="white")
 
@@ -1012,9 +1006,10 @@ def plot_fri(res, path, site_name=""):
     _overlay_network(ax, res, color="white",
                      lw_scale=0.7, alpha=0.5)
     _overlay_osm_waterways(ax, res, alpha=0.85)
-    cx86, cy86 = _circle(0.15)
     ax.plot(cx86, cy86, "k--", lw=1.5)
     ax.plot(0, 0, "k^", ms=10, zorder=8)
+    ax.set_xlim(-r_ext_x, r_ext_x)
+    ax.set_ylim(-r_ext_y, r_ext_y)
     ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
@@ -1030,13 +1025,15 @@ def plot_fri(res, path, site_name=""):
     _overlay_network(ax2, res, color="white",
                      lw_scale=0.7, alpha=0.5)
     _overlay_osm_waterways(ax2, res, alpha=0.85)
-    ax2.plot(cx86, cy86, "k--", lw=1.5, label="r86")
+    ax2.plot(cx86, cy86, "k--", lw=1.5, label=f"r86={r86_m:.0f}m")
     ax2.plot(0, 0, "k^", ms=10, zorder=8, label="Sensor")
     patches = [mpatches.Patch(
         color=FLOOD_COLORS[4-i],
         label=FLOOD_LABELS[i]) for i in range(5)]
     ax2.legend(handles=patches, fontsize=8,
                loc="upper right", framealpha=0.85)
+    ax2.set_xlim(-r_ext_x, r_ext_x)
+    ax2.set_ylim(-r_ext_y, r_ext_y)
     ax2.set_aspect("equal")
     ax2.set_xlabel("Easting [km]")
     sc  = res["susc_at_sensor"]
@@ -1081,6 +1078,6 @@ def plot_fri(res, path, site_name=""):
         f"{res['site_lat']:.4f}N {res['site_lon']:.4f}E",
         fontsize=13, fontweight="bold")
     fig.tight_layout()
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")

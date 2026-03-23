@@ -101,6 +101,8 @@ from evapotranspiration    import compute_et, report_et, plot_et
 from electrical_conductivity import compute_ec, report_ec, plot_ec
 from slides                import (compute_landslide, report_landslide,
                                     plot_landslide)
+from floods                import (compute_flood, report_flood,
+                                    plot_topo_network, plot_hand, plot_fri)
 from reports import write_report
 from crns_corrections import get_crns_corrections, report_crns_corrections
 from geology import get_geology, report_geology
@@ -820,7 +822,33 @@ def main():
         print(f"   [WARN] Landslide computation failed: {_ls_e}")
         landslide_result = None
 
-    # 20d — RF analysis (celle + RFI da OSM)
+    # 20d — Flood susceptibility (HAND + FRI)
+    print("\n[20d] Computing flood susceptibility (HAND + FRI) ...")
+    flood_result = None
+    try:
+        lats_1d = lats_grid[:, 0]
+        lons_1d = lons_grid[0, :]
+        flood_result = compute_flood(
+            elev_30     = elev,
+            lats_30     = lats_1d,
+            lons_30     = lons_1d,
+            elev_90     = elev,
+            lats_90     = lats_1d,
+            lons_90     = lons_1d,
+            jrc_res     = water,
+            era5_res    = era5_sm,
+            osm_elements= [],
+            site_lat    = LAT,
+            site_lon    = LON,
+            r_inner_km  = DEM_RADIUS_M / 1000.0,
+            verbose     = True,
+        )
+        print(report_flood(flood_result, site_name=NAME))
+    except Exception as _fl_e:
+        print(f"   [WARN] Flood computation failed: {_fl_e}")
+        flood_result = None
+
+    # 20e — RF analysis (celle + RFI da OSM)
     rf_result = None
     print("\n[20] RF analysis (OpenCelliD + OSM RFI) ...")
     if OPENCELLID_TOKEN:
@@ -888,6 +916,7 @@ def main():
         et=et_result,
         ec=ec_result,
         landslide=landslide_result,
+        flood=flood_result,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -977,6 +1006,19 @@ def main():
         _plot(_outpath("crns_landslide.png"),
               plot_landslide, landslide_result,
               _outpath("crns_landslide.png"),
+              site_name=NAME, r86_m=r86)
+    if flood_result is not None:
+        _plot(_outpath("crns_flood_topo.png"),
+              plot_topo_network, flood_result,
+              _outpath("crns_flood_topo.png"),
+              site_name=NAME, r86_m=r86)
+        _plot(_outpath("crns_flood_hand.png"),
+              plot_hand, flood_result,
+              _outpath("crns_flood_hand.png"),
+              site_name=NAME, r86_m=r86)
+        _plot(_outpath("crns_flood_fri.png"),
+              plot_fri, flood_result,
+              _outpath("crns_flood_fri.png"),
               site_name=NAME, r86_m=r86)
 
     elapsed = time.perf_counter() - t0

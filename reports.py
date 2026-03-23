@@ -17,6 +17,7 @@ from radiofreq          import report_rf
 from evapotranspiration import report_et
 from electrical_conductivity import report_ec
 from slides             import report_landslide
+from floods             import report_flood
 
 
 def write_report(path, params, results):
@@ -181,6 +182,13 @@ def write_report(path, params, results):
     h("LANDSLIDE SUSCEPTIBILITY (infinite slope model)")
     if 'landslide' in results and results['landslide'] is not None:
         s(report_landslide(results['landslide']))
+    else:
+        s("  [non disponibile]")
+    s()
+
+    h("FLOOD SUSCEPTIBILITY (HAND + FRI)")
+    if 'flood' in results and results['flood'] is not None:
+        s(report_flood(results['flood']))
     else:
         s("  [non disponibile]")
     s()
