@@ -31,6 +31,7 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import requests
+import hashlib, json, os
 from datetime import datetime, date
 
 
@@ -45,6 +46,88 @@ MONTHS = ['Jan','Feb','Mar','Apr','May','Jun',
 # (usati internamente da pvlib.temperature.faiman)
 FAIMAN_U0 = 25.0   # W m-2 K-1
 FAIMAN_U1 = 6.84   # W m-2 K-1 (m/s)-1
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _cache_key(*parts):
+    tag = "_".join(str(p) for p in parts)
+    return hashlib.sha256(tag.encode()).hexdigest()[:16]
+
+
+# --- PVGIS cache ---
+
+def _pvgis_cache_paths(lat, lon, startyear, endyear, horizon_hash, cache_dir):
+    key = _cache_key(f"{lat:.6f}", f"{lon:.6f}", startyear, endyear, horizon_hash)
+    base = os.path.join(cache_dir, f"pvgis_cache_{key}")
+    return base + ".csv", base + ".json"
+
+
+def _save_pvgis_cache(tmy, lat, lon, startyear, endyear, horizon_hash, cache_dir):
+    csv_path, meta_path = _pvgis_cache_paths(
+        lat, lon, startyear, endyear, horizon_hash, cache_dir)
+    os.makedirs(cache_dir, exist_ok=True)
+    tmy.to_csv(csv_path)
+    with open(meta_path, "w") as f:
+        json.dump(dict(lat=lat, lon=lon, startyear=startyear, endyear=endyear,
+                       horizon_hash=horizon_hash), f)
+    print(f"   PVGIS cached -> {csv_path}", flush=True)
+
+
+def _load_pvgis_cache(lat, lon, startyear, endyear, horizon_hash, cache_dir):
+    import pandas as pd
+    csv_path, meta_path = _pvgis_cache_paths(
+        lat, lon, startyear, endyear, horizon_hash, cache_dir)
+    if not (os.path.exists(csv_path) and os.path.exists(meta_path)):
+        return None
+    with open(meta_path) as f:
+        m = json.load(f)
+    if (abs(m["lat"] - lat) > 1e-7 or abs(m["lon"] - lon) > 1e-7
+            or m["startyear"] != startyear or m["endyear"] != endyear
+            or m["horizon_hash"] != horizon_hash):
+        return None
+    print(f"   PVGIS loaded from cache: {csv_path}", flush=True)
+    tmy = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+    return tmy
+
+
+# --- Open-Meteo precipitation cache ---
+
+def _precip_cache_path(lat, lon, startyear, endyear, cache_dir):
+    key = _cache_key(f"{lat:.6f}", f"{lon:.6f}", startyear, endyear)
+    return os.path.join(cache_dir, f"precip_cache_{key}.json")
+
+
+def _save_precip_cache(monthly_mean, rainy_mean, era5_elevation_m,
+                       lat, lon, startyear, endyear, cache_dir):
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _precip_cache_path(lat, lon, startyear, endyear, cache_dir)
+    payload = dict(
+        lat=lat, lon=lon, startyear=startyear, endyear=endyear,
+        monthly_mean=list(monthly_mean),
+        rainy_mean=list(rainy_mean),
+        era5_elevation_m=era5_elevation_m,
+    )
+    with open(path, "w") as f:
+        json.dump(payload, f)
+    print(f"   Open-Meteo precip cached -> {path}", flush=True)
+
+
+def _load_precip_cache(lat, lon, startyear, endyear, cache_dir):
+    path = _precip_cache_path(lat, lon, startyear, endyear, cache_dir)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        d = json.load(f)
+    if (abs(d["lat"] - lat) > 1e-7 or abs(d["lon"] - lon) > 1e-7
+            or d["startyear"] != startyear or d["endyear"] != endyear):
+        return None
+    print(f"   Open-Meteo precip loaded from cache: {path}", flush=True)
+    return (np.array(d["monthly_mean"]),
+            np.array(d["rainy_mean"]),
+            float(d["era5_elevation_m"]))
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +198,25 @@ def _reample_horizon_for_pvgis(horizon_deg, azimuths_deg, n_pvgis=36):
     return [round(float(h), 2) for h in h_interp]
 
 
-def _get_pvgis_tmy(lat, lon, userhorizon=None, startyear=2005, endyear=2020):
+def _get_pvgis_tmy(lat, lon, userhorizon=None, startyear=2005, endyear=2020,
+                   cache_dir=None):
     """
     Scarica TMY da PVGIS via pvlib.
     Ritorna DataFrame orario con colonne pvlib standard.
     """
+    # Cache key include un hash dell'orizzonte (se fornito)
+    if userhorizon is not None:
+        h_str = "_".join(f"{v:.2f}" for v in userhorizon)
+        horizon_hash = hashlib.sha256(h_str.encode()).hexdigest()[:12]
+    else:
+        horizon_hash = "nohorizon"
+
+    if cache_dir is not None:
+        tmy = _load_pvgis_cache(lat, lon, startyear, endyear,
+                                horizon_hash, cache_dir)
+        if tmy is not None:
+            return tmy, None   # meta non usato a valle
+
     import pvlib
     kwargs = dict(
         map_variables=True,
@@ -132,6 +229,10 @@ def _get_pvgis_tmy(lat, lon, userhorizon=None, startyear=2005, endyear=2020):
         kwargs['userhorizon'] = userhorizon
 
     tmy, meta = pvlib.iotools.get_pvgis_tmy(lat, lon, **kwargs)
+
+    if cache_dir is not None:
+        _save_pvgis_cache(tmy, lat, lon, startyear, endyear,
+                          horizon_hash, cache_dir)
     return tmy, meta
 
 
@@ -151,6 +252,9 @@ def _compute_poa(tmy, lat, panel_tilt_deg, panel_azimuth_deg):
     # Posizione solare
     solpos = loc.get_solarposition(tmy.index)
 
+    # Irradianza solare extraterrestre (richiesta dal modello Perez)
+    dni_extra = pvlib.irradiance.get_extra_radiation(tmy.index)
+
     # Trasposizione GHI -> POA (modello Perez)
     poa = pvlib.irradiance.get_total_irradiance(
         surface_tilt    = panel_tilt_deg,
@@ -161,6 +265,7 @@ def _compute_poa(tmy, lat, panel_tilt_deg, panel_azimuth_deg):
         ghi  = tmy['ghi'],
         dhi  = tmy['dhi'],
         model='perez',
+        dni_extra=dni_extra,
     )
     return poa['poa_global']
 
@@ -173,26 +278,34 @@ def _compute_cell_temp(poa_global, temp_air, wind_speed):
     return temp_air + poa_global / (FAIMAN_U0 + FAIMAN_U1 * wind_speed)
 
 
-def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
+def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020,
+                                  cache_dir=None):
     """
     Scarica precipitazioni giornaliere storiche da Open-Meteo Climate API
     (sorgente ERA5, risoluzione ~31 km).
 
-    Ritorna array (12,) con precipitazione mensile media [mm/mese]
-    e array (12,) con giorni medi di pioggia per mese (precip > 1 mm).
+    Ritorna array (12,) con precipitazione mensile media [mm/mese],
+    array (12,) con giorni medi di pioggia per mese (precip > 1 mm),
+    e quota della cella ERA5 [m] (campo 'elevation' nella risposta JSON).
     """
-    url = "https://climate-api.open-meteo.com/v1/climate"
+    if cache_dir is not None:
+        cached = _load_precip_cache(lat, lon, startyear, endyear, cache_dir)
+        if cached is not None:
+            return cached
+
+    url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "latitude"         : lat,
         "longitude"        : lon,
         "start_date"       : f"{startyear}-01-01",
         "end_date"         : f"{endyear}-12-31",
-        "models"           : "ERA5",
         "daily"            : "precipitation_sum",
     }
     resp = requests.get(url, params=params, timeout=60)
     resp.raise_for_status()
     data = resp.json()
+
+    era5_elevation_m = float(data.get('elevation', float('nan')))
 
     import pandas as pd
     dates  = pd.to_datetime(data['daily']['time'])
@@ -212,7 +325,10 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020):
     rainy_mean    = rainy_monthly.groupby(
                         rainy_monthly.index.month).mean().values
 
-    return monthly_mean, rainy_mean
+    if cache_dir is not None:
+        _save_precip_cache(monthly_mean, rainy_mean, era5_elevation_m,
+                           lat, lon, startyear, endyear, cache_dir)
+    return monthly_mean, rainy_mean, era5_elevation_m
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +346,7 @@ def get_site_climate(
     panel_azimuth_deg = 180.0,  # 180 = sud
     startyear         = 2005,
     endyear           = 2020,
+    cache_dir         = None,   # directory per cache locale dei dati scaricati
 ):
     """
     Caratterizzazione climatica completa di un sito CRNS.
@@ -333,7 +450,8 @@ def get_site_climate(
     tmy, meta = _get_pvgis_tmy(lat, lon,
                                 userhorizon=userhorizon,
                                 startyear=startyear,
-                                endyear=endyear)
+                                endyear=endyear,
+                                cache_dir=cache_dir)
 
     # Pressione: PVGIS restituisce Pa -> converti in hPa
     tmy['pressure_hpa'] = tmy['pressure'] / 100.0
@@ -404,8 +522,9 @@ def get_site_climate(
     # ------------------------------------------------------------------ #
     # 8. Precipitazioni — Open-Meteo
     # ------------------------------------------------------------------ #
-    precip_monthly, rainy_days_monthly = _get_precipitation_openmeteo(
-        lat, lon, startyear=startyear, endyear=endyear)
+    precip_monthly, rainy_days_monthly, era5_elevation_m = \
+        _get_precipitation_openmeteo(lat, lon, startyear=startyear, endyear=endyear,
+                                     cache_dir=cache_dir)
 
     # ------------------------------------------------------------------ #
     # 9. Scalari annuali
@@ -464,12 +583,15 @@ def get_site_climate(
         wet_months              = [MONTHS[i] for i,v in
                                    enumerate(precip_monthly) if v > 100],
 
+        # --- ERA5 grid ---
+        era5_elevation_m        = era5_elevation_m,
+
         # --- Metadata ---
         panel_tilt_deg          = panel_tilt_deg,
         panel_azimuth_deg       = panel_azimuth_deg,
         panel_efficiency        = panel_efficiency,
         horizon_source          = horizon_source,
-        data_source_radiation   = str(meta.get('inputs', {})
+        data_source_radiation   = str((meta or {}).get('inputs', {})
                                       .get('meteo_data', {})
                                       .get('radiation_db', 'PVGIS')),
         data_source_precip      = 'ERA5 via Open-Meteo ~31km',
@@ -480,6 +602,148 @@ def get_site_climate(
     )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Power budget — dimensionamento pannello + batteria per datalogger CRNS
+# ---------------------------------------------------------------------------
+
+#: Consumo tipico CRNS datalogger [W] (sensore + logger + modem GSM medio)
+CRNS_POWER_W_DEFAULT = 10.0
+
+#: Giorni di autonomia senza sole (batteria)
+STORAGE_DAYS_DEFAULT = 3
+
+#: Fattore di sicurezza (perdite cavi, invecchiamento pannello, angolo sub-ottimale)
+SAFETY_FACTOR_DEFAULT = 1.30
+
+#: Giorni per mese (anno non bisestile)
+_DAYS_PER_MONTH = np.array([31,28,31,30,31,30,31,31,30,31,30,31], dtype=float)
+
+
+def compute_power_budget(
+    energy_monthly_kWh,
+    datalogger_power_W = CRNS_POWER_W_DEFAULT,
+    storage_days       = STORAGE_DAYS_DEFAULT,
+    safety_factor      = SAFETY_FACTOR_DEFAULT,
+):
+    """
+    Dimensionamento energetico per un datalogger CRNS alimentato a pannello solare.
+
+    Il calcolo è basato sull'energia mensile prodotta da 1 m² di pannello
+    (già corretta per temperatura e orizzonte locale — da PVGIS via get_site_climate).
+
+    Metodo
+    ------
+    1. Consumo giornaliero [Wh] = datalogger_power_W × 24
+    2. Consumo mensile [kWh] = consumo_giornaliero × giorni_del_mese / 1000
+    3. Mese peggiore = mese con meno energia prodotta (tipicamente dicembre)
+    4. Area pannello necessaria [m²]:
+           area = (consumo_mese_peggiore [kWh] × safety_factor) /
+                   energia_mese_peggiore [kWh/m²]
+    5. Batteria [Wh] = consumo_giornaliero × storage_days
+
+    Parameters
+    ----------
+    energy_monthly_kWh  : array (12,) energia prodotta da 1 m² di pannello [kWh/mese]
+                          (da get_site_climate → 'energy_monthly_kWh')
+    datalogger_power_W  : consumo medio del datalogger [W]
+                          default 10 W (sensore CRNS + logger + modem GSM)
+    storage_days        : giorni di autonomia con batteria (senza sole) [d]
+                          default 3
+    safety_factor       : fattore di sovradimensionamento (perdite, invecchiamento)
+                          default 1.30
+
+    Returns
+    -------
+    dict con:
+        consumption_Wh_day          float  consumo giornaliero [Wh]
+        consumption_monthly_kWh     array  consumo mensile [kWh]  (12,)
+        balance_monthly_kWh_m2      array  surplus/deficit per 1 m² [kWh/mese] (12,)
+        worst_month_idx             int    indice mese peggiore (0=gen)
+        worst_month_name            str    nome mese peggiore
+        worst_month_energy_kWh_m2   float  energia peggio mese [kWh/m²]
+        recommended_panel_m2        float  area pannello raccomandata [m²]
+        recommended_panel_Wp        float  potenza picco raccomandata [W]
+                                           (assumendo 200 Wp/m²)
+        battery_Wh                  float  capacità batteria raccomandata [Wh]
+        battery_Ah_12V              float  equivalente in Ah a 12V
+        datalogger_power_W          float  consumo usato
+        storage_days                int    giorni autonomia usati
+        safety_factor               float  fattore sicurezza usato
+    """
+    energy = np.asarray(energy_monthly_kWh, dtype=float)
+
+    consumption_Wh_day      = datalogger_power_W * 24.0
+    consumption_monthly_kWh = consumption_Wh_day * _DAYS_PER_MONTH / 1000.0
+
+    balance = energy - consumption_monthly_kWh   # + = surplus, − = deficit
+
+    worst_idx  = int(np.argmin(energy))
+    worst_name = MONTHS[worst_idx]
+    worst_en   = float(energy[worst_idx])
+
+    worst_consumption_kWh = float(consumption_monthly_kWh[worst_idx])
+    energy_needed_kWh     = worst_consumption_kWh * safety_factor
+
+    if worst_en > 0:
+        panel_m2 = energy_needed_kWh / worst_en
+    else:
+        panel_m2 = float('nan')
+
+    panel_Wp  = panel_m2 * 200.0   # 200 Wp/m² pannello policristallino tipico
+    battery_Wh = consumption_Wh_day * storage_days
+    battery_Ah = battery_Wh / 12.0   # a 12V
+
+    return dict(
+        consumption_Wh_day        = consumption_Wh_day,
+        consumption_monthly_kWh   = consumption_monthly_kWh,
+        balance_monthly_kWh_m2    = balance,
+        worst_month_idx           = worst_idx,
+        worst_month_name          = worst_name,
+        worst_month_energy_kWh_m2 = worst_en,
+        recommended_panel_m2      = panel_m2,
+        recommended_panel_Wp      = panel_Wp,
+        battery_Wh                = battery_Wh,
+        battery_Ah_12V            = battery_Ah,
+        datalogger_power_W        = datalogger_power_W,
+        storage_days              = storage_days,
+        safety_factor             = safety_factor,
+    )
+
+
+def report_power_budget(pb, months=MONTHS):
+    """Stampa leggibile del power budget."""
+    w = 72
+    L = [
+        "=" * w,
+        "POWER BUDGET — Solar Panel & Battery Sizing for CRNS Datalogger",
+        "=" * w,
+        f"  Datalogger power    : {pb['datalogger_power_W']:.1f} W",
+        f"  Daily consumption   : {pb['consumption_Wh_day']:.0f} Wh/day",
+        f"  Battery autonomy    : {pb['storage_days']} days",
+        f"  Safety factor       : {pb['safety_factor']:.2f}",
+        "",
+        f"  Worst month         : {pb['worst_month_name']}",
+        f"  Solar energy (worst): {pb['worst_month_energy_kWh_m2']:.2f} kWh/m²",
+        "",
+        f"  *** Recommended panel : {pb['recommended_panel_m2']:.2f} m²"
+        f"  (~{pb['recommended_panel_Wp']:.0f} Wp) ***",
+        f"  *** Recommended batt. : {pb['battery_Wh']:.0f} Wh"
+        f"  ({pb['battery_Ah_12V']:.0f} Ah @ 12V) ***",
+        "",
+    ]
+    hdr = "  " + " " * 10 + "  ".join(f"{m:>5}" for m in months)
+    L.append(hdr)
+    L.append("  " + "-" * (w - 2))
+    mc = pb['consumption_monthly_kWh']
+    mb = pb['balance_monthly_kWh_m2']
+    mc_s = "  ".join(f"{v:5.2f}" for v in mc)
+    mb_s = "  ".join(f"{v:+5.2f}" for v in mb)
+    L.append(f"  {'Consum [kWh]':<10} {mc_s}")
+    L.append(f"  {'Balance/m² ':<10} {mb_s}  (+ surplus)")
+    L.append("=" * w)
+    return "\n".join(L)
 
 
 # ---------------------------------------------------------------------------

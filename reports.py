@@ -2,6 +2,20 @@
 # REPORT
 # =============================================================================
 
+import numpy as np
+from kappa_topo_3d      import report_kappa_3d
+from lulc               import report_lulc
+from site_fluxes        import report_site_fluxes, report_desilets_curve
+from site_climate       import report_site_climate, report_power_budget
+from terrain_indices    import report_twi, report_thermal_index
+from get_soil_properties import report_soil_properties
+from vegetation_indices  import report_snow_cover
+from crns_corrections   import report_crns_corrections
+from geology            import report_geology
+from sampling_plan      import report_sampling_plan
+from radiofreq          import report_rf
+
+
 def write_report(path, params, results):
     W = 72
     L = []
@@ -33,7 +47,10 @@ def write_report(path, params, results):
     h("NEUTRON FOOTPRINT PARAMETERS")
     s(f"  r86 (sea level ref)  : {results['r86_sealevel']:.1f} m")
     s(f"  r86 (at site, P-cor) : {results['r86']:.1f} m")
-    s(f"  z86 (at site)        : {results['z86']:.2f} cm")
+    s(f"  z86 (at site, +lw)   : {results['z86']:.2f} cm")
+    s(f"    z86 = 8.3 / (rho_b * (0.0564 + theta_v + lw))")
+    s(f"    lw (lattice water) = {results.get('lw', 0.0):.4f} g/g")
+    s(f"    theta_v_SOC (sup.) = {results['site_fluxes'].get('theta_v_soc', 0.0):.4f} m³/m³")
     s(f"  V0 (flat reference)  : {results['V0']:.2f} m3")
     s(f"    (cylinder: pi*r86^2 * z86, used as denominator of kappa)")
     s(f"  V_eff (actual soil)  : {results['Veff']:.2f} m3")
@@ -65,8 +82,14 @@ def write_report(path, params, results):
     s(f"    The muon-normalised neutron count must be DIVIDED by kappa_muon")
     s(f"    to recover the flux equivalent to an open-sky reference station.")
     s()
+    s(f"  kappa_lulc           : {results.get('kappa_lulc', 1.0):.4f}")
+    s(f"    Fonte: ESA WorldCover 10m — rapporto H footprint / H suolo baseline.")
+    s(f"    kappa_lulc > 1: alta presenza di acqua/vegetazione nel footprint.")
+    s(f"    kappa_lulc < 1: bassa presenza di H (asfalto, roccia nuda).")
+    s(f"    Condizione di riferimento: θ_v_init = {params['theta_v_init']:.3f} m³/m³.")
+    s()
     s(f"  kappa_total          : {results['kappa_total']:.4f}")
-    s(f"    = kappa_topo x kappa_muon (both effects combined)")
+    s(f"    = kappa_topo × kappa_muon × kappa_lulc (tutti gli effetti combinati)")
     s()
 
     h("SOIL MOISTURE CORRECTION")
@@ -77,56 +100,78 @@ def write_report(path, params, results):
     s(f"    (positive = overestimate, negative = underestimate)")
     s()
 
-    h("OUTPUT FILES — DESCRIPTION")
-    s(f"  crns_topo_main.png")
-    s(f"    Panel 1 (top left): DEM map centred on sensor with three")
-    s(f"    concentric circles at 0.5*r86, r86, 1.5*r86. The red triangle")
-    s(f"    marks the sensor. Colour = elevation (m a.s.l.).")
-    s(f"    Panel 2 (top right): theoretical kappa vs slope angle for a")
-    s(f"    uniform hilltop (red) and dolina (blue), with horizontal line")
-    s(f"    showing this site's kappa_topo.")
-    s(f"    Panel 3 (bottom left): E-W terrain cross-section through")
-    s(f"    sensor, with r86 marked.")
-    s(f"    Panel 4 (bottom centre): N-S terrain cross-section.")
-    s(f"    Panel 5 (bottom right): bar chart of kappa_topo, kappa_muon,")
-    s(f"    kappa_total. Red = above 1, blue = below 1.")
+    h("KAPPA_TOPO 3-D RAY-CASTING DETAIL")
+    s(report_kappa_3d(
+        results['kappa_topo'], results['kappa_pieno'],
+        results['kappa_sopra'], results['kappa_vuoto'],
+        results['kappa_info']))
     s()
-    s(f"  crns_footprint.png")
-    s(f"    Left panel: pixel classification within r86. Each DEM cell")
-    s(f"    coloured by contribution type: RED=terrain deficit (z_DEM")
-    s(f"    below slab bottom, zero overlap), ORANGE=partial overlap,")
-    s(f"    GREEN=full contribution (terrain at or above reference).")
-    s(f"    Grey shading intensity = radial weight W(r). Dashed = r86.")
-    s(f"    Centre panel: radial overlap profile. W(r)-weighted mean")
-    s(f"    soil overlap fraction vs distance from sensor, in 15m shells.")
-    s(f"    Value 1.0 = full slab in that shell. Dashed = W(r) shape.")
-    s(f"    Right panel: per-azimuth mean overlap fraction, polar diagram.")
-    s(f"    North up, clockwise. Colour red (deficit) to green (full).")
-    s(f"    Shows which compass directions lose most soil volume.")
-    s(f"  crns_horizon.png")
-    s(f"    Left panel: polar diagram of horizon elevation angle psi(phi)")
-    s(f"    for each azimuth (North up, clockwise). The radial axis is")
-    s(f"    the terrain elevation angle above horizontal as seen from the")
-    s(f"    sensor. A flat site would show a circle at 0 deg.")
-    s(f"    Right panel: per-azimuth muon sensitivity f(phi)/f_ref, where")
-    s(f"    f(phi) = integral of cos^2(theta_z) over the visible zenith arc")
-    s(f"    [0, 90-psi(phi)]. A flat site would show a circle at 1.0.")
-    s(f"    Directions with high horizon angle appear depressed (less muon")
-    s(f"    flux from those directions). The mean over all azimuths gives")
-    s(f"    kappa_muon = {results['kappa_muon']:.4f}.")
+
+    h("SITE FLUXES")
+    s(report_site_fluxes(results['site_fluxes']))
     s()
-    s(f"  crns_fov_detail.png")
-    s(f"    Left panel: neutron soil contribution by azimuth. Each bar")
-    s(f"    shows the W(r)-weighted mean overlap fraction per compass")
-    s(f"    direction (0=no soil, 1=full slab). Colour red->green.")
-    s(f"    Orange dashed = kappa_topo. Immediately shows which sectors")
-    s(f"    dominate the SM bias and in which direction.")
-    s(f"    Right panel: muon FOV map. X=azimuth, Y=elevation angle above")
-    s(f"    horizontal (0=horizon, 90=zenith). Blue = muon angular weight")
-    s(f"    cos^2(theta_z)*sin(theta_z), peak near 45 deg. Grey = blocked")
-    s(f"    by terrain. Black line = horizon profile psi(az). Orange line =")
-    s(f"    per-azimuth muon fraction scaled to elevation axis (0->0, 1->90)")
-    s(f"    shows which directions contribute less to normalisation rate.")
+
+    h("DESILETS CURVE — N(θ_v) EXPECTED RANGE")
+    s(report_desilets_curve(results['desilets_curve']))
+    s()
+
+    h("SITE CLIMATE")
+    s(report_site_climate(results['site_climate']))
+    s()
+
+    h("POWER BUDGET — SOLAR PANEL & BATTERY")
+    s(report_power_budget(results['power_budget']))
+    s()
+
+    h("SOIL PROPERTIES")
+    s(report_soil_properties(results['soil']))
+    s()
+
+    h("TOPOGRAPHIC WETNESS INDEX")
+    s(report_twi(results['twi']))
+    s()
+
+    h("THERMAL INDEX")
+    sc = results['site_climate']
+    s(report_thermal_index(
+        results['thermal'],
+        sc['T_mean_monthly_C'],
+        sc['T_min_monthly_C'],
+        sc['T_max_monthly_C']))
+    s()
+
+    h("SNOW COVER — MODIS MOD10A1")
+    s(report_snow_cover(results['snow']))
+    s()
+
+    h("LULC — LAND USE / LAND COVER")
+    s(report_lulc(results['lulc']))
+    s()
+
+    h("GEOLOGY (MACROSTRAT API)")
+    if 'geology' in results:
+        s(report_geology(results['geology']))
+    else:
+        s("  [non disponibile]")
+    s()
+
+    h("CRNS SUPPLEMENTARY CORRECTIONS (WV, AGBH, SWE)")
+    if 'crns_corrections' in results:
+        z86 = results.get('z86', 15.0)
+        s(report_crns_corrections(results['crns_corrections'], z86_cm=z86))
+    else:
+        s("  [non disponibile]")
+    s()
+
+    h("RF ANALYSIS (OpenCelliD + OSM RFI)")
+    s(report_rf(results.get("rf")))
+    s()
+
+    h("OPTIMAL SOIL SAMPLING PLAN")
+    if 'sampling' in results:
+        s(report_sampling_plan(results['sampling']))
+    else:
+        s("  [non disponibile]")
     s()
 
     s("="*W)

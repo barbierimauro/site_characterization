@@ -47,18 +47,22 @@ LON = 11.763470
 LAT = 45.338058
 
 #================
-LON = 11.885655         # decimal degrees, WGS84
-LAT = 46.279864          # decimal degrees, WGS84
 
+NAME = "pradazzo"
+#Cima Pradazzo
+LON = 11.822478        # decimal degrees, WGS84
+LAT = 46.355945          # decimal degrees, WGS84
 
-
+NAME = "ELHAMAN"
+LON = 30.727636
+LAT = 29.234043
 
 SENSOR_HEIGHT_M = 2.0         # sensor height above ground (m)
 RHO_BULK        = 1.4         # soil bulk density (g/cm3)
 THETA_V_INIT    = 0.20        # soil moisture estimate for r86/z86 (m3/m3)
 DEM_RADIUS_M    = 2000.0      # DEM download radius (m)
 AZIMUTH_STEP_DEG= 2.0         # azimuth resolution for horizon scan (deg)
-OUTPUT_DIR      = "pale"
+OUTPUT_DIR      = NAME
 OPENTOPO_API_KEY= ""
 DEM_SOURCE      = "copernicus_aws"
 N_CORES         = 4
@@ -76,7 +80,32 @@ import matplotlib.colors as mcolors
 from matplotlib.gridspec import GridSpec
 import requests, os, json, hashlib, time, math
 import multiprocessing as mp
+import gc
 from kappa_topo_3d import compute_kappa_topo_3d, report_kappa_3d
+from site_fluxes        import (compute_site_fluxes, report_site_fluxes,
+                                compute_desilets_curve, report_desilets_curve)
+from site_climate       import (get_site_climate, report_site_climate,
+                                compute_power_budget, report_power_budget)
+from terrain_indices    import (compute_twi, report_twi,
+                                compute_thermal_index, report_thermal_index)
+from get_soil_properties import get_soil_properties, report_soil_properties
+from water               import compute_water_eta, report_water_eta
+from vegetation_indices  import (get_vegetation_indices, report_vegetation,
+                                 get_snow_cover, report_snow_cover)
+from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
+                   plot_climate, plot_soil, plot_thermal, plot_twi,
+                   plot_kappa_budget, plot_water)
+from vegetation_plots    import plot_seasonal_cycles, plot_timeseries, plot_maps
+from lulc import get_lulc, report_lulc, plot_lulc_worldcover, plot_lulc_osm
+from reports import write_report
+from crns_corrections import get_crns_corrections, report_crns_corrections
+from geology import get_geology, report_geology
+from sampling_plan import (compute_sampling_plan, report_sampling_plan,
+                            plot_sampling_plan)
+from era5sm import (get_era5_soil_moisture, report_era5_sm, plot_era5_sm)
+from smphysics import (fuse_soil_moisture, report_sm_fusion, plot_sm_fusion)
+from config_parser import load_config, get as cfg_get
+from radiofreq import run_rf_analysis
 
 try:
     import rasterio
@@ -128,9 +157,19 @@ def r86_kohli(theta_v, pressure_hpa):
     """Footprint radius (86% sensitivity, m) — Kohli 2015."""
     return KOHLI_A1 / (theta_v + KOHLI_A2) * (P0_HPA / pressure_hpa)
 
-def z86_desilets(theta_v, rho_b):
-    """Penetration depth (86% sensitivity, cm) — Kohli/Bogena."""
-    return DESILETS_NUM / (rho_b * (DESILETS_ALPHA + theta_v))
+def z86_desilets(theta_v, rho_b, lw=0.0):
+    """
+    Penetration depth (86% sensitivity, cm).
+
+    Formula Köhli/Bogena con correzione lattice water (lw):
+        z86 = 8.3 / (rho_b * (0.0564 + theta_v + lw))
+
+    lw [g/g] è l'acqua strutturalmente legata nei minerali argillosi
+    (Köhli 2021). Anche a suolo "secco" (theta_v_liquida=0), lw è sempre
+    presente e riduce z86 sistematicamente.
+    Con lw=0 si recupera la formula originale.
+    """
+    return DESILETS_NUM / (rho_b * (DESILETS_ALPHA + theta_v + max(0.0, lw)))
 
 def weight_radial(r, r86):
     """Radial sensitivity weight W(r) — exponential decay, Kohli 2015."""
@@ -323,60 +362,73 @@ def compute_kappa_topo(elev, dx_grid, dy_grid, dist_grid, sz, r86, z86_cm,
 # HORIZON ANGLES — parallel
 # =============================================================================
 
-_G_TREE      = None
-_G_ELEV_FLAT = None
-_G_SENSOR_Z  = None
+def _horizon_cache_path(lat, lon, sz, azimuth_step_deg, max_radius_m, dem_shape):
+    tag = (f"{lat:.6f}_{lon:.6f}_{sz:.2f}_"
+           f"{azimuth_step_deg:.3f}_{max_radius_m:.1f}_"
+           f"{dem_shape[0]}x{dem_shape[1]}")
+    key = hashlib.sha256(tag.encode()).hexdigest()[:16]
+    return _outpath(f"horizon_cache_{key}.npz")
 
-def _init_horizon(pts, elev_flat, sensor_z):
-    global _G_TREE, _G_ELEV_FLAT, _G_SENSOR_Z
-    from scipy.spatial import cKDTree
-    _G_TREE      = cKDTree(pts)
-    _G_ELEV_FLAT = elev_flat
-    _G_SENSOR_Z  = sensor_z
-
-def _work_horizon(args):
-    az_batch, r_vals, sx, sy = args
-    out = []
-    for az in az_batch:
-        ar  = np.radians(az)
-        px  = sx + r_vals * np.sin(ar)
-        py  = sy + r_vals * np.cos(ar)
-        _, idx = _G_TREE.query(np.column_stack([px, py]))
-        ev  = _G_ELEV_FLAT[idx]
-        ok  = ~np.isnan(ev)
-        if not np.any(ok):
-            out.append(0.0); continue
-        dz  = ev[ok] - _G_SENSOR_Z
-        ang = np.degrees(np.arctan2(dz, r_vals[ok]))
-        out.append(max(0.0, float(ang.max())))
-    return out
 
 def compute_horizon_angles(elev, dx_grid, dy_grid, sx, sy, sz,
-                            azimuth_step_deg, max_radius_m, n_cores=N_CORES):
-    """Compute horizon elevation angle (deg) for every azimuth."""
-    azimuths  = np.arange(0, 360, azimuth_step_deg)
-    n_az      = len(azimuths)
-    r_vals    = np.arange(10, max_radius_m, 20.0)
-    n_r       = len(r_vals)
-    pts       = np.column_stack([dx_grid.ravel(), dy_grid.ravel()])
-    elev_flat = elev.ravel()
-    batches   = np.array_split(azimuths, n_cores)
-    n_b       = len(batches)
-    print(f"   Horizon: {n_az} az x {n_r} r  [{n_cores} cores]", flush=True)
-    args   = [(b, r_vals, sx, sy) for b in batches]
-    parts  = [None] * n_b
-    t0     = time.perf_counter()
-    ctx    = mp.get_context("spawn")
-    with ctx.Pool(n_cores, initializer=_init_horizon,
-                  initargs=(pts, elev_flat, sz)) as pool:
-        for i, res in enumerate(pool.imap(_work_horizon, args)):
-            parts[i] = res
-            el  = time.perf_counter() - t0
-            eta = el / (i+1) * (n_b - i - 1)
-            print(f"   Horizon  {i+1}/{n_b}  elapsed={el:.1f}s  ETA={eta:.1f}s",
-                  flush=True)
-    horizon = np.array([v for p in parts for v in p])
+                            azimuth_step_deg, max_radius_m, n_cores=N_CORES,
+                            cache_dir=None, lat=None, lon=None):
+    """
+    Compute horizon elevation angle (deg) for every azimuth.
+
+    Vectorised implementation using RegularGridInterpolator — no
+    multiprocessing overhead.  Results are cached to a .npz file keyed
+    on (lat, lon, sensor_z, az_step, radius, dem_shape).
+    """
+    from scipy.interpolate import RegularGridInterpolator
+
+    azimuths = np.arange(0, 360, azimuth_step_deg)
+    n_az     = len(azimuths)
+    r_vals   = np.arange(10, max_radius_m, 20.0)
+    n_r      = len(r_vals)
+
+    # Cache check
+    cache_file = None
+    if lat is not None and lon is not None:
+        cache_file = _horizon_cache_path(
+            lat, lon, sz, azimuth_step_deg, max_radius_m, elev.shape)
+        if os.path.exists(cache_file):
+            d = np.load(cache_file)
+            print(f"   Horizon: from cache  ({cache_file})", flush=True)
+            return d["azimuths"], d["horizon"]
+
+    print(f"   Horizon: {n_az} az x {n_r} r  [vectorised]", flush=True)
+    t0 = time.perf_counter()
+
+    # Build RegularGridInterpolator on the regular (dy, dx) meter grid.
+    # dx_grid varies only along columns; dy_grid only along rows.
+    dx_1d = dx_grid[0, :]
+    dy_1d = dy_grid[:, 0]
+    elev_clean = np.where(np.isnan(elev), float(np.nanmean(elev)), elev)
+
+    interp = RegularGridInterpolator(
+        (dy_1d, dx_1d), elev_clean,
+        method="linear", bounds_error=False,
+        fill_value=float(np.nanmean(elev_clean)))
+
+    # All ray sample points: shape (n_az, n_r)
+    az_rad = np.radians(azimuths)
+    px = sx + r_vals[None, :] * np.sin(az_rad[:, None])   # (n_az, n_r)
+    py = sy + r_vals[None, :] * np.cos(az_rad[:, None])
+
+    pts   = np.column_stack([py.ravel(), px.ravel()])
+    elevs = interp(pts).reshape(n_az, n_r)
+
+    dz   = elevs - sz
+    angs = np.degrees(np.arctan2(dz, r_vals[None, :]))
+    horizon = np.maximum(0.0, angs.max(axis=1))
+
     print(f"   Horizon done  total={time.perf_counter()-t0:.1f}s", flush=True)
+
+    if cache_file is not None:
+        np.savez_compressed(cache_file, azimuths=azimuths, horizon=horizon)
+        print(f"   Horizon cached -> {cache_file}", flush=True)
+
     return azimuths, horizon
 
 # =============================================================================
@@ -470,6 +522,23 @@ def compute_neutron_fov(elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86_cm,
 def main():
     t0 = time.perf_counter()
 
+    # ------------------------------------------------------------------ #
+    # Legge config.cfg (opzionale — il programma funziona anche senza)   #
+    # ------------------------------------------------------------------ #
+    _cfg_path = os.path.join(_SCRIPT_DIR, "config.cfg")
+    _cfg = {}
+    if os.path.exists(_cfg_path):
+        try:
+            _cfg = load_config(_cfg_path)
+            print(f"[config] Loaded: {_cfg_path}")
+        except Exception as _e:
+            print(f"[config] WARNING: cannot parse {_cfg_path}: {_e}")
+    else:
+        print(f"[config] No config.cfg found — RF analysis will be skipped "
+              f"(create {_cfg_path} with OPENCELLID_TOKEN to enable)")
+
+    OPENCELLID_TOKEN = cfg_get(_cfg, "OPENCELLID_TOKEN", default="")
+
     print("=" * 62)
     print("CRNS TOPOGRAPHIC CORRECTION TOOL")
     print("=" * 62)
@@ -527,7 +596,8 @@ def main():
     print("\n[4] Computing horizon angles ...")
     azimuths, horizon = compute_horizon_angles(
         elev, dx_grid, dy_grid, sx, sy, sz,
-        AZIMUTH_STEP_DEG, DEM_RADIUS_M, N_CORES)
+        AZIMUTH_STEP_DEG, DEM_RADIUS_M, N_CORES,
+        cache_dir=_OUT, lat=LAT, lon=LON)
 
     # 5 — kappa_muon
     print("\n[5] Computing kappa_muon ...")
@@ -537,13 +607,127 @@ def main():
           f"max_horizon={horizon.max():.1f}deg  "
           f"mean_horizon={horizon.mean():.1f}deg")
 
-    # 6 — Neutron FOV per-azimuth
-    print("\n[6] Computing neutron per-azimuth r_eff ...")
+    # 6 — Site fluxes & N0 (provvisori, senza lw — verrà ricalcolato dopo soil)
+    print("\n[6] Computing site fluxes (preliminary, lw=0 — updated after soil) ...")
+    site_fluxes = compute_site_fluxes(LAT, LON, s_elev, kappa_topo, kappa_muon)
+    print(report_site_fluxes(site_fluxes))
+
+    # 7 — Site climate
+    print("\n[7] Fetching site climate (PVGIS + Open-Meteo) ...")
+    site_climate = get_site_climate(
+        LAT, LON, s_elev,
+        horizon_deg=horizon, azimuths_deg=azimuths,
+        cache_dir=_OUT)
+    print(report_site_climate(site_climate))
+
+    # 7b — Power budget (pannello solare + batteria)
+    power_budget = compute_power_budget(site_climate['energy_monthly_kWh'])
+    print(report_power_budget(power_budget))
+
+    # 8 — Soil properties (SoilGrids)
+    print("\n[8] Fetching soil properties (SoilGrids) ...")
+    soil = get_soil_properties(LAT, LON, z86_cm=z86, cache_dir=_OUT)
+    print(report_soil_properties(soil))
+
+    # 8b — Aggiorna z86 con lattice water dal suolo reale
+    lw       = soil.get('lattice_water_gg', 0.0)
+    soc_gkg  = soil.get('soc_crns', 0.0)
+    if not np.isnan(float(lw)) and lw > 0:
+        z86_lw = z86_desilets(THETA_V_INIT, RHO_BULK, lw=lw)
+        print(f"   z86 senza lw : {z86:.2f} cm")
+        print(f"   z86 con lw   : {z86_lw:.2f} cm  (lw={lw:.4f} g/g)")
+        z86 = z86_lw
+    lw  = float(lw) if not np.isnan(float(lw)) else 0.0
+    soc = float(soc_gkg) if soc_gkg and not np.isnan(float(soc_gkg)) else 0.0
+
+    # 8c — Ricalcola site_fluxes con lw aggiornato (N0 ora a theta_v=0, lw presente)
+    site_fluxes = compute_site_fluxes(
+        LAT, LON, s_elev, kappa_topo, kappa_muon, lw=lw,
+        soc_gkg=soc, rho_b=RHO_BULK)
+    print(report_site_fluxes(site_fluxes))
+
+    # 8d — Desilets curve N(theta_v) con lw e SOC supplementare
+    theta_wp_sr = soil.get('theta_wp', 0.05)
+    theta_fc_sr = soil.get('theta_fc', 0.35)
+    soc_equiv   = site_fluxes.get('theta_v_soc', 0.0)
+    desilets_curve = compute_desilets_curve(
+        site_fluxes['N0_theoretical'],
+        theta_wp  = theta_wp_sr if not np.isnan(theta_wp_sr) else 0.05,
+        theta_fc  = theta_fc_sr if not np.isnan(theta_fc_sr) else 0.35,
+        lw        = lw,
+        soc_equiv = soc_equiv,
+    )
+    print(report_desilets_curve(desilets_curve))
+
+    # 9 — JRC Surface Water (eta correction)
+    print("\n[9] Fetching JRC surface water occurrence (eta) ...")
+    water = compute_water_eta(
+        LAT, LON, dx_grid, dy_grid, dist_grid, r86,
+        cache_dir=_OUT)
+    print(report_water_eta(water))
+
+    # 10 — Topographic Wetness Index (con cache)
+    print("\n[10] Computing TWI ...")
+    twi = compute_twi(elev, dx_grid, dy_grid, dist_grid, r86,
+                      n_cores=N_CORES, cache_dir=_OUT)
+    print(report_twi(twi))
+
+    # 11 — Thermal index
+    print("\n[11] Computing thermal index ...")
+    # era5_elevation_m non è ancora esposto da get_site_climate:
+    # si usa s_elev come fallback (delta_elevation = 0, nessuna correzione lapse)
+    era5_elev = site_climate.get('era5_elevation_m', s_elev)
+    thermal = compute_thermal_index(
+        elev, dist_grid, s_elev,
+        horizon_deg       = horizon,
+        azimuths_deg      = azimuths,
+        T_mean_monthly_era5 = site_climate['T_mean_monthly_C'],
+        T_min_monthly_era5  = site_climate['T_min_monthly_C'],
+        T_max_monthly_era5  = site_climate['T_max_monthly_C'],
+        POA_monthly_kWh_m2  = site_climate['POA_monthly_kWh_m2'],
+        era5_elevation_m    = era5_elev,
+    )
+    print(report_thermal_index(thermal,
+                               site_climate['T_mean_monthly_C'],
+                               site_climate['T_min_monthly_C'],
+                               site_climate['T_max_monthly_C']))
+
+    # 12 — Vegetation indices (Landsat + MODIS)
+    print("\n[12] Fetching vegetation indices (Landsat + MODIS) ...")
+    try:
+        veg = get_vegetation_indices(
+            LAT, LON, dx_grid, dy_grid, dist_grid, r86,
+            cache_dir=_OUT)
+        print(report_vegetation(veg))
+    except Exception as _veg_e:
+        print(f"   [WARN] Vegetation indices failed: {_veg_e}")
+        import traceback; traceback.print_exc()
+        veg = {"landsat": {}, "modis": {}, "warning": str(_veg_e)}
+
+    # 13 — Snow cover (MODIS MOD10A1)
+    print("\n[13] Fetching snow cover (MODIS MOD10A1) ...")
+    snow = get_snow_cover(LAT, LON, cache_dir=_OUT)
+    print(report_snow_cover(snow))
+
+    # 14 — LULC (Land Use / Land Cover)
+    print("\n[14] Computing LULC kappa (WorldCover + OSM) ...")
+    lulc_res = get_lulc(
+        LAT, LON,
+        dx_grid, dy_grid, dist_grid,
+        r86,
+        cache_dir=_OUT,
+        osm_radius_m=int(r86 * 1.5),
+        theta_v_init=THETA_V_INIT,
+        verbose=True)
+    print(report_lulc(lulc_res))
+
+    # 15 — Neutron FOV per-azimuth
+    print("\n[15] Computing neutron per-azimuth r_eff ...")
     az_neutron, overlap_az, deficit_az = compute_neutron_fov(
         elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86,
         AZIMUTH_STEP_DEG, DEM_RADIUS_M)
 
-    # 7 — Mean slope
+    # 15b — Mean slope
     nr, nc = elev.shape
     dpx = abs(np.nanmedian(np.diff(dx_grid[nr//2,:])))
     dpy = abs(np.nanmedian(np.diff(dy_grid[:,nc//2])))
@@ -554,17 +738,118 @@ def main():
     fpm        = dist_grid <= r86
     mean_slope = float(np.nanmean(ag[fpm])) if np.any(fpm) else 0.0
 
-    kappa_tot     = kappa_topo * kappa_muon
+    # kappa_lulc: usa WorldCover come riferimento (più affidabile globalmente)
+    kappa_lulc    = lulc_res.get('wc_kappa', 1.0)
+    kappa_tot     = kappa_topo * kappa_muon * kappa_lulc
     theta_v_corr  = THETA_V_INIT / kappa_topo if kappa_topo > 0 else float("inf")
+
+    # 16 — Correzioni supplementari (WV, AGBH, SWE)
+    print("\n[16] Computing supplementary CRNS corrections (WV, AGBH, SWE) ...")
+    lai_mean = 0.0
+    try:
+        lai_data = veg.get('lai_monthly_mean')
+        if lai_data is not None and len(lai_data) > 0:
+            lai_mean = float(np.nanmean(lai_data))
+    except Exception:
+        pass
+    crns_corr = get_crns_corrections(
+        LAT, LON,
+        lai_annual_m2m2=lai_mean,
+        cache_dir=_OUT)
+    print(report_crns_corrections(crns_corr, z86_cm=z86))
+
+    # 17 — Geology (Macrostrat API)
+    print("\n[17] Fetching geology (Macrostrat) ...")
+    geology = get_geology(LAT, LON, cache_dir=_OUT)
+    print(report_geology(geology))
+
+    # 18 — ERA5-Land hourly soil moisture
+    print("\n[18] Downloading ERA5-Land soil moisture ...")
+    era5_sm = get_era5_soil_moisture(
+        LAT, LON,
+        cache_dir  = _OUT,
+        start_year = 2015,
+        verbose    = True,
+    )
+    print(report_era5_sm(era5_sm))
+
+    # 19 — Downscaled soil moisture (data fusion)
+    print("\n[19] Downscaling soil moisture (ERA5 + local data) ...")
+    sm_fused = fuse_soil_moisture(
+        era5_res    = era5_sm,
+        soil_res    = soil,
+        twi_res     = twi,
+        climate_res = crns_corr,
+        lulc_res    = lulc_res,
+        verbose     = True,
+    )
+    print(report_sm_fusion(sm_fused))
+
+    # 20 — RF analysis (celle + RFI da OSM)
+    rf_result = None
+    print("\n[20] RF analysis (OpenCelliD + OSM RFI) ...")
+    if OPENCELLID_TOKEN:
+        try:
+            rf_result = run_rf_analysis(
+                lat         = LAT,
+                lon         = LON,
+                site_elev_m = s_elev,
+                token       = OPENCELLID_TOKEN,
+                cache_dir   = _OUT,
+                verbose     = True,
+            )
+            conn = rf_result["connectivity"]
+            rfi  = rf_result["rfi"]
+            print(f"   Connectivity: {conn['n_cells_total']} celle analizzate")
+            for tech, info in conn.get("by_radio", {}).items():
+                print(f"     {tech:<5}  best={info['best_rx_dbm']:+.0f} dBm  "
+                      f"quality={info['quality']}")
+            print(f"   RFI index: {rfi['rfi_index']:.1f}/10  "
+                  f"level={rfi['rfi_level']}  "
+                  f"n_sources={rfi['n_sources']}")
+        except Exception as _rf_e:
+            print(f"   [WARN] RF analysis failed: {_rf_e}")
+    else:
+        print("   Skipped (OPENCELLID_TOKEN not set in config.cfg)")
+
+    sampling = compute_sampling_plan(
+        r86,
+        theta_v_init = THETA_V_INIT,
+        theta_wp     = soil.get('theta_wp', 0.05),
+        theta_fc     = soil.get('theta_fc', 0.35),
+        pressure_hpa = pressure,
+    )
+    print(report_sampling_plan(sampling))
 
     results = dict(
         sensor_alt=s_elev, pressure=pressure, rho_air=rho_air,
         mean_slope_rad=mean_slope,
         max_horizon=float(horizon.max()), mean_horizon=float(horizon.mean()),
         r86_sealevel=r86_sea, r86=r86, z86=z86,
+        lw=lw, soc_gkg=soc,
         V0=V0, Veff=Veff,
-        kappa_topo=kappa_topo, kappa_muon=kappa_muon, kappa_total=kappa_tot,
+        kappa_topo=kappa_topo, kappa_muon=kappa_muon,
+        kappa_lulc=kappa_lulc, kappa_total=kappa_tot,
+        kappa_pieno=kappa_pieno, kappa_sopra=kappa_sopra,
+        kappa_vuoto=kappa_vuoto, kappa_info=kappa_info,
         theta_v_corrected=theta_v_corr,
+        site_fluxes=site_fluxes,
+        site_climate=site_climate,
+        soil=soil,
+        water=water,
+        twi=twi,
+        thermal=thermal,
+        veg=veg,
+        snow=snow,
+        lulc=lulc_res,
+        power_budget=power_budget,
+        desilets_curve=desilets_curve,
+        crns_corrections=crns_corr,
+        geology=geology,
+        era5_sm=era5_sm,
+        sm_fused=sm_fused,
+        sampling=sampling,
+        rf=rf_result,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -575,31 +860,87 @@ def main():
         omega="n/a", tol="n/a",
     )
 
-    # 8 — Report
+    # 21 — Report
     rpt = _outpath("crns_report.txt")
-    print(f"\n[7] Writing report -> {rpt}")
+    print(f"\n[21] Writing report -> {rpt}")
     print(write_report(rpt, params, results))
 
-    # 9 — Plots
-    print("[8] Generating plots ...")
-    plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
-              results, _outpath("crns_topo_main.png"))
-    plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86,
-                   kappa_topo, wmap, az_neutron, overlap_az, deficit_az,
-                   _outpath("crns_footprint.png"))
-    plot_horizon(azimuths, horizon, kappa_muon, per_az_muon,
-                 _outpath("crns_horizon.png"))
-    _results_alt = s_elev
-    plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
-                    az_neutron, overlap_az, r86, z86, kappa_topo,
-                    _outpath("crns_fov_detail.png"))
+    # 22 — Plots
+    print("[22] Generating plots ...")
+
+    def _plot(fn, func, *args, **kwargs):
+        func(*args, **kwargs)
+        gc.collect()
+        print(f"  Saved: {fn}", flush=True)
+
+    _plot(_outpath("crns_topo_main.png"),
+          plot_main, elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
+          results, _outpath("crns_topo_main.png"),
+          lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
+    _plot(_outpath("crns_footprint.png"),
+          plot_footprint, elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86,
+          kappa_topo, wmap, az_neutron, overlap_az, deficit_az,
+          _outpath("crns_footprint.png"))
+    _plot(_outpath("crns_horizon.png"),
+          plot_horizon, azimuths, horizon, kappa_muon, per_az_muon,
+          _outpath("crns_horizon.png"))
+    _plot(_outpath("crns_fov_detail.png"),
+          plot_fov_detail, azimuths, horizon, per_az_muon, kappa_muon,
+          az_neutron, overlap_az, r86, z86, kappa_topo,
+          _outpath("crns_fov_detail.png"),
+          lat=LAT, lon=LON, sensor_alt=s_elev)
+    _plot(_outpath("crns_climate.png"),
+          plot_climate, site_climate, thermal,
+          _outpath("crns_climate.png"),
+          lat=LAT, lon=LON, sensor_alt=s_elev)
+    _plot(_outpath("crns_soil.png"),
+          plot_soil, soil, _outpath("crns_soil.png"), lat=LAT, lon=LON)
+    _plot(_outpath("crns_thermal.png"),
+          plot_thermal, site_climate, thermal,
+          _outpath("crns_thermal.png"),
+          lat=LAT, lon=LON, sensor_alt=s_elev)
+    _plot(_outpath("crns_twi.png"),
+          plot_twi, twi, elev, dx_grid, dy_grid, dist_grid, r86,
+          _outpath("crns_twi.png"), lat=LAT, lon=LON)
+    _plot(_outpath("crns_kappa_budget.png"),
+          plot_kappa_budget, results, _outpath("crns_kappa_budget.png"),
+          lat=LAT, lon=LON)
+    _plot(_outpath("crns_water.png"),
+          plot_water, water, dx_grid, dy_grid, dist_grid, r86,
+          _outpath("crns_water.png"), lat=LAT, lon=LON)
+    _plot(_outpath("crns_veg_seasonal.png"),
+          plot_seasonal_cycles, veg, _outpath("crns_veg_seasonal.png"),
+          site_name=NAME)
+    _plot(_outpath("crns_veg_timeseries.png"),
+          plot_timeseries, veg, _outpath("crns_veg_timeseries.png"),
+          site_name=NAME)
+    _plot(_outpath("crns_veg_maps.png"),
+          plot_maps, veg, dx_grid, dy_grid, dist_grid, r86,
+          _outpath("crns_veg_maps.png"), site_name=NAME)
+    _plot(_outpath("crns_lulc_worldcover.png"),
+          plot_lulc_worldcover, lulc_res, dx_grid, dy_grid, dist_grid,
+          _outpath("crns_lulc_worldcover.png"), site_name=NAME)
+    _plot(_outpath("crns_lulc_osm.png"),
+          plot_lulc_osm, lulc_res, _outpath("crns_lulc_osm.png"),
+          site_name=NAME, map_radius_m=int(r86 * 1.5))
+    _plot(_outpath("crns_sampling_plan.png"),
+          plot_sampling_plan, sampling, elev, dx_grid, dy_grid, dist_grid,
+          _outpath("crns_sampling_plan.png"), site_name=NAME)
+    _plot(_outpath("crns_era5_sm.png"),
+          plot_era5_sm, era5_sm, _outpath("crns_era5_sm.png"), site_name=NAME)
+    _plot(_outpath("crns_sm_fusion.png"),
+          plot_sm_fusion, sm_fused, _outpath("crns_sm_fusion.png"), site_name=NAME)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")
     print(f"  Output dir : {_OUT}")
     print(f"  Files:")
-    for fn in ["crns_report.txt","crns_topo_main.png",
-               "crns_footprint.png","crns_horizon.png","crns_fov_detail.png"]:
+    for fn in ["crns_report.txt", "crns_topo_main.png",
+               "crns_footprint.png", "crns_horizon.png", "crns_fov_detail.png",
+               "crns_climate.png", "crns_soil.png", "crns_thermal.png",
+               "crns_twi.png", "crns_kappa_budget.png", "crns_water.png",
+               "crns_veg_seasonal.png", "crns_veg_timeseries.png",
+               "crns_veg_maps.png"]:
         p = _outpath(fn)
         sz_kb = os.path.getsize(p)//1024 if os.path.exists(p) else 0
         print(f"    {fn}  ({sz_kb} kB)")

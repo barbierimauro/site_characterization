@@ -1,0 +1,36 @@
+% ============================================================
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+% ============================================================
+
+Cosmic-Ray Neutron Sensing (CRNS) is a field technique for non-invasive,
+area-averaged soil moisture measurement at the hectometre scale.
+Before deploying a CRNS station, a thorough characterisation of the site
+is necessary to (i)~quantify the geometric and geophysical corrections
+that relate measured neutron counts to soil moisture, (ii)~estimate the
+expected signal dynamic range, and (iii)~design the optimal soil sampling
+campaign for calibration.
+
+This technical note describes a fully integrated Python pipeline that
+automates CRNS site characterisation from publicly available global
+datasets.
+The core physical outputs are three multiplicative correction factors:
+the topographic correction $\kT$, computed by a three-dimensional
+ray-casting algorithm over a 30-m DEM; the muon field-of-view correction
+$\kM$, derived analytically from the horizon angle profile; and the
+land-use/land-cover correction $\kL$, based on ESA WorldCover and
+OpenStreetMap.
+Their product $\kTot = \kT\,\kM\,\kL$ directly enters the calibration
+of the reference count $\Nzero$ through the Desilets~(2010) equation,
+extended here to account for clay-mineral lattice water $\lw$
+(K\"ohli et al., 2021) while preserving full analytical invertibility.
+
+Supplementary characterisation modules provide: seasonal atmospheric
+water-vapour and snow-water-equivalent climatologies from ERA5;
+above-ground biomass hydrogen estimates from MODIS LAI;
+global lithological information from the Macrostrat API; an optimally
+weighted soil sampling plan; and a Topographic Wetness Index.
+
+The pipeline is validated on a test site in the Italian Alps, demonstrating
+how each correction factor and supplementary quantity can inform
+installation decisions and calibration planning.

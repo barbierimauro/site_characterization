@@ -1,0 +1,193 @@
+% ============================================================
+\section{Data Sources}
+\label{sec:data}
+% ============================================================
+
+All datasets used by the pipeline are freely accessible from global
+open repositories.
+Table~\ref{tab:datasources} lists each source with the relevant
+variables, spatial resolution, and access method.
+No registration is required for any source; all downloads are executed
+automatically at run time through standard HTTP requests.
+
+\begin{table}[H]
+\centering
+\caption{Data sources used by the CRNS site characterization pipeline.}
+\label{tab:datasources}
+\small
+\begin{tabularx}{\linewidth}{lXll}
+\toprule
+Source & Variables & Resolution & Access \\
+\midrule
+Copernicus DEM GLO-30
+  & Elevation (m a.s.l.)
+  & 30 m
+  & AWS S3 (open) \\
+ESA WorldCover 2021 v200
+  & Land-cover class (11 classes)
+  & 10 m
+  & AWS S3 / Planetary Computer \\
+OpenStreetMap (Overpass API)
+  & Water bodies, roads, buildings
+  & Vector
+  & REST API \\
+SoilGrids 2.0
+  & Sand, silt, clay (\%), bulk density, SOC
+  & 250 m
+  & ISRIC REST API \\
+ERA5-Land / Open-Meteo Archive
+  & Temperature, RH, snowfall, snow depth (daily, 5 yr);
+    soil moisture 0--100 cm (hourly, $\geq$2015)
+  & $\sim$9 km (soil moisture) / $\sim$30 km (climate)
+  & Open-Meteo REST API \\
+MODIS MOD15A2H
+  & Leaf Area Index (LAI), 8-day composites
+  & 500 m
+  & NASA AppEEARS / pystac \\
+Macrostrat API v2
+  & Geological units, lithology, age
+  & Global (variable)
+  & Macrostrat REST API \\
+\citet{smart2019} / \texttt{crnpy}
+  & Geomagnetic rigidity cutoff $R_c$
+  & $1^\circ \times 1^\circ$ grid
+  & Python package \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Digital Elevation Model}
+
+The Copernicus DEM GLO-30 \citep{copernicus_dem} provides a
+near-global 30-m resolution surface elevation model derived from
+TanDEM-X radar interferometry.
+The pipeline downloads the tiles covering a square bounding box
+$[{-}r_\mathrm{buf},\,{+}r_\mathrm{buf}]$ centred on the site,
+with default buffer $r_\mathrm{buf} = 3\,\rzz \approx \SI{350}{m}$.
+Tiles are mosaicked and reprojected to a metric coordinate system
+(UTM, WGS-84) before use.
+
+The DEM is the master grid: all raster products are resampled to
+match its spatial extent and pixel spacing.
+
+\subsection{Land-Use / Land-Cover}
+
+ESA WorldCover 2021 \citep{worldcover2021} provides a 10-m global
+land-cover classification based on Sentinel-1 and Sentinel-2
+imagery.
+The 11 classes (tree cover, shrubland, grassland, cropland,
+built-up, bare/sparse vegetation, snow/ice, permanent water,
+herbaceous wetland, mangroves, moss/lichen) are aggregated to the
+hydrogen equivalence groups of Table~\ref{tab:fH}.
+
+OpenStreetMap (OSM) features — surface water bodies, roads with
+sealed surfaces, and building footprints — are queried via the
+Overpass API within the $2\,\rzz$ radius of the footprint.
+OSM vectors complement WorldCover for fine-scale features
+(individual buildings, canals) that may be below the 10-m raster
+resolution.
+
+The JRC Global Surface Water dataset \citep{pekel2016} provides
+occurrence frequency (0–100\%) for permanent and seasonal surface
+water, used to distinguish permanent from temporary water bodies
+in the $f_H$ assignment.
+
+\subsection{Soil Properties}
+
+SoilGrids 2.0 \citep{soilgrids2020} provides global predictions at
+six depth intervals (0–5, 5–15, 15–30, 30–60, 60–100, 100–200 cm)
+for:
+\begin{itemize}[nosep]
+  \item sand, silt, clay fractions [\si{\gram\per\kilo\gram}];
+  \item bulk density (fine earth) [\si{\centi\gram\per\cubic\centi\metre}];
+  \item soil organic carbon (SOC) content [\si{\deci\gram\per\kilo\gram}].
+\end{itemize}
+The pipeline uses the $0$–$30\,\si{cm}$ depth-weighted mean, which
+matches the typical $z_{86}$ penetration range.
+Lattice water $\lw$ is derived from the clay fraction using the
+empirical relation of \citet{kohli2021}:
+\begin{equation}
+  \lw = 0.097\,f_\mathrm{clay} + 0.033,
+  \label{eq:lw_clay}
+\end{equation}
+where $f_\mathrm{clay}$ is the clay mass fraction [\si{g/g}].
+
+\subsection{Atmospheric Data}
+
+Monthly climatologies of near-surface air temperature, relative
+humidity, snowfall, and snow depth are downloaded from the
+Open-Meteo ERA5 archive \citep{hersbach2020} for the 5 years
+preceding the analysis date.
+Daily values are aggregated to monthly means and then averaged
+across years to obtain a 12-month climatology.
+
+From temperature $T$ [\si{\celsius}] and relative humidity
+$\mathrm{RH}$ [\%], the atmospheric water-vapour density
+$\rho_{WV}$ [\si{\gram\per\cubic\metre}] is computed via the
+Magnus formula:
+\begin{equation}
+  e_\mathrm{sat}(T) = 611.2 \exp\!\left(\frac{17.67\,T}{T + 243.5}\right)
+  \quad[\si{\pascal}],
+  \label{eq:esat}
+\end{equation}
+\begin{equation}
+  \rho_{WV} = \frac{\mathrm{RH}}{100}\,
+              \frac{e_\mathrm{sat}}{R_v\,T_K}
+  \quad[\si{\gram\per\cubic\metre}],
+  \label{eq:rhoWV}
+\end{equation}
+where $R_v = \SI{461.5}{\joule\per\kilo\gram\per\kelvin}$ is the
+specific gas constant for water vapour and $T_K$ is temperature
+in Kelvin.
+
+Snow-water equivalent (SWE) is estimated as
+\begin{equation}
+  \mathrm{SWE} = h_\mathrm{snow} \times \rho_\mathrm{snow},
+  \label{eq:swe}
+\end{equation}
+with $h_\mathrm{snow}$ the mean snow depth [m] and
+$\rho_\mathrm{snow} = \SI{250}{\kilo\gram\per\cubic\metre}$ a
+representative seasonal density for wet alpine snow.
+
+\subsection{Soil Moisture — ERA5-Land}
+\label{sec:data:era5sm}
+
+Hourly volumetric soil moisture is retrieved from the ERA5-Land
+reanalysis via the Open-Meteo Historical API.
+The module \texttt{era5sm.py} downloads three depth layers:
+0--7\,cm, 7--28\,cm, and 28--100\,cm, all in
+\si{\cubic\metre\per\cubic\metre}.
+Downloads proceed year by year from a configurable
+\texttt{start\_year} (default 2015) to the current date, with
+each annual time-series stored as a compressed \texttt{.npz} file
+(\texttt{hourly\_YYYY.npz}).
+Monthly statistics (mean, standard deviation, minimum, maximum, and
+observation count) are derived from the full multi-year record and
+cached in a single \texttt{monthly\_agg.npz}.
+On subsequent runs only missing years are downloaded; the monthly
+aggregates are recomputed only if the set of cached years has
+changed.
+
+The three ERA5-Land depth layers bracket the typical CRNS
+penetration depth $z_{86}$, making the 0--7\,cm layer the primary
+reference for the data-fusion step (Section~\ref{sec:methods:smfusion}).
+
+\subsection{Vegetation (LAI)}
+
+The MODIS MOD15A2H product provides 8-day, 500-m composite
+estimates of leaf area index (LAI) [\si{\metre\squared\per\metre\squared}].
+Monthly means are derived from all cloud-free composites within
+the analysis year.
+LAI is used to estimate above-ground biomass hydrogen (AGBH)
+as described in Section~\ref{sec:methods:agbh}.
+
+\subsection{Geology}
+
+The Macrostrat API v2 provides global geological map data at
+multiple resolution scales (``large'', ``medium'', ``small'').
+For each query point the pipeline retrieves the dominant
+lithological unit(s), their Macrostrat rock type, geologic age,
+and estimated hydrogen inventory impact on $\lw$.
+Where lithological data are unavailable (ocean, ice sheet), the
+pipeline returns a ``not available'' flag and uses the
+SoilGrids-derived $\lw$ without geological supplement.

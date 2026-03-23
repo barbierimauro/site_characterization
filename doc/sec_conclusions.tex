@@ -1,0 +1,76 @@
+% ============================================================
+\section{Conclusions}
+\label{sec:conclusions}
+% ============================================================
+
+We have presented the \emph{CRNS Site Characterization Pipeline},
+a fully integrated Python tool for automating the pre-installation
+assessment of Cosmic-Ray Neutron Sensing stations from global open
+datasets.
+The pipeline addresses a recognised gap in the CRNS ecosystem:
+while operational correction routines are available (e.g.\
+\texttt{crnpy}), no single tool previously computed all
+\emph{site-specific} correction factors and supplementary
+characterisation quantities before sensor deployment.
+
+\paragraph{Core physics outputs.}
+The three multiplicative correction factors — $\kT$ (topographic,
+3-D ray-casting), $\kM$ (muon field-of-view, analytical integral),
+and $\kL$ ($W(r)$-weighted WorldCover + OSM) — are combined into
+$\kTot = \kT\kM\kL$.
+Together with the lattice water $\lw$ derived from SoilGrids clay
+fractions, they determine the reference count $N_0$ through the
+Desilets (2010) formula, which preserves full analytical
+invertibility and remains the primary calibration reference.
+
+\paragraph{Supplementary characterisation.}
+The seasonal climatology of atmospheric water vapour ($f_{WV}$),
+snow-water equivalent (SWE), and above-ground biomass hydrogen
+(AGBH) quantifies the operational corrections that will be required
+throughout the measurement period.
+The Macrostrat geological characterisation flags unusual lithologies
+that may bias the clay-based $\lw$ estimate.
+The Topographic Wetness Index provides a spatially distributed map
+of expected moisture variability within the footprint, relevant to
+calibration planning.
+
+\paragraph{Sampling design.}
+The $W(r)$-optimised 26-point sampling plan, and the accompanying
+$\rzz(\thetav)$ dynamic-range plot, translate the footprint physics
+directly into field-campaign instructions.
+The plan minimises the variance of the footprint-averaged soil
+moisture estimate for a fixed number of samples.
+
+\paragraph{Uncertainty.}
+A combined uncertainty budget for the Italian Alps example yields
+$\sigma_{N_0}/N_0 \approx 5\%$, with the LULC classification
+uncertainty ($\sim 4\%$) and the soil lattice water ($\sim 3\%$)
+as the dominant terms.
+This demonstrates that accurate site characterisation can
+substantially reduce the systematic error in soil-moisture
+retrievals, and identifies where additional field effort (in-situ
+clay measurements, vegetation water content surveys) is most
+rewarding.
+
+\paragraph{Outlook.}
+Future extensions could include:
+\begin{itemize}[nosep]
+  \item Integration of LiDAR DEMs where available, to resolve
+        sub-30-m terrain features relevant for $\kT$.
+  \item A sensitivity analysis module that propagates input
+        uncertainties through the full correction chain and reports
+        quantitative bounds on $N_0$.
+  \item Time-varying $\kL$ driven by satellite-derived LAI and
+        canopy water content, enabling quasi-operational correction.
+  \item Support for portable CRNS rovers \citep{schron2017}, where
+        the footprint geometry changes with vehicle speed and the
+        sampling plan module must be adapted accordingly.
+\end{itemize}
+
+The pipeline source code is openly available at
+\url{https://github.com/barbierimauro/site_characterization}
+under an open-source licence.
+All datasets used are publicly accessible without registration.
+We invite contributions and reports of site-specific validation
+datasets to expand the empirical basis for $f_H$ assignments and
+$\lw$ estimates.

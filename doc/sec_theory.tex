@@ -1,0 +1,266 @@
+% ============================================================
+\section{Theoretical Background}
+\label{sec:theory}
+% ============================================================
+
+\subsection{Neutron Footprint Geometry}
+
+The neutron footprint of a CRNS probe is characterised by two
+length scales: the radial sensitivity radius $\rzz$ and the
+penetration depth $\zzz$.
+Both depend on the total hydrogen content in the environment, which
+includes liquid soil water $\thetav$, clay-mineral lattice water $\lw$,
+and soil organic matter.
+
+\paragraph{Footprint radius.}
+\citet{kohli2015} showed that the radius enclosing 86\% of the
+neutron signal is well approximated by
+\begin{equation}
+  \rzz(\thetav, P) = \frac{A_1}{\thetav + A_2} \cdot \frac{P_0}{P},
+  \label{eq:r86}
+\end{equation}
+with $A_1 = \SI{29.13}{\metre\cubic\metre\per\cubic\metre}$,
+$A_2 = \SI{0.0578}{\cubic\metre\per\cubic\metre}$, reference pressure
+$P_0 = \SI{1013.25}{\hecto\pascal}$, and site pressure $P$.
+At $\thetav = \SI{0.20}{\cubic\metre\per\cubic\metre}$ and sea level,
+$\rzz \approx \SI{113}{\metre}$.
+The footprint shrinks by roughly 40\% from dry ($\thetav \to 0$) to
+saturated ($\thetav \approx \SI{0.45}{\cubic\metre\per\cubic\metre}$)
+conditions.
+
+\paragraph{Penetration depth.}
+The depth enclosing 86\% of the neutron signal is
+\begin{equation}
+  \zzz(\thetav, \rho_b, \lw) =
+    \frac{\SI{8.3}{\centi\metre}}
+         {\rho_b \bigl(\num{0.0564} + \thetav + \lw\bigr)},
+  \label{eq:z86}
+\end{equation}
+where $\rho_b$ is the dry soil bulk density [\si{\gram\per\cubic\centi\metre}],
+$\thetav$ is liquid volumetric water content [\si{\cubic\metre\per\cubic\metre}],
+and $\lw$ is the lattice water content [\si{\gram\per\gram}]
+\citep{bogena2013, kohli2021}.
+Including $\lw$ in Eq.~\eqref{eq:z86} is physically necessary because
+clay-mineral-bound hydrogen moderates neutrons even in air-dry soil,
+reducing $\zzz$ regardless of liquid water.
+
+\paragraph{Radial sensitivity weight.}
+The contribution of a soil volume element at radial distance $r$ from
+the probe decreases exponentially \citep{kohli2015}:
+\begin{equation}
+  W(r) = \exp\!\left(-\frac{r}{\rzz / 3}\right).
+  \label{eq:Wr}
+\end{equation}
+This weight function is used throughout the pipeline to compute
+footprint-averaged quantities (TWI, LULC fractions, soil properties).
+
+% ---------------------------------------------------------------
+\subsection{The Desilets Inversion Formula}
+\label{sec:desilets}
+% ---------------------------------------------------------------
+
+The relationship between neutron count rate $N$ and liquid soil
+moisture $\thetav$ is described by the Desilets equation
+\citep{desilets2010}:
+\begin{equation}
+  \frac{N}{N_0} = a_0 + \frac{a_1}{\thetav + \lw + a_2},
+  \label{eq:desilets}
+\end{equation}
+with parameters $a_0 = 0.0808$, $a_1 = 0.372$, $a_2 = 0.115$
+\citep{desilets2010}.
+The term $\lw$ has been added here (K\"ohli et al., 2021): it represents
+the constant offset from lattice water, which is indistinguishable from
+liquid water by the neutron probe.
+The formula retains full analytical invertibility:
+\begin{equation}
+  \thetav = \frac{a_1}{N/N_0 - a_0} - \lw - a_2.
+  \label{eq:desilets_inv}
+\end{equation}
+This is the key advantage of Eq.~\eqref{eq:desilets} over more
+complex parameterisations \citep{kohli2015}: $N_0$ can be determined
+unambiguously from a single calibration measurement.
+
+\paragraph{Reference count $N_0$.}
+$N_0$ is computed from the theoretically expected epithermal neutron
+count at the site under ``dry'' conditions ($\thetav = 0$, only $\lw$
+present):
+\begin{equation}
+  N_0 = \frac{N_\mathrm{neut,site}}{a_0 + a_1\,/\,(lw + a_2)},
+  \label{eq:N0}
+\end{equation}
+where $N_\mathrm{neut,site}$ is the absolute expected count rate after
+altitude, rigidity, and topographic corrections (Section~\ref{sec:fluxes}).
+With $\lw = 0$, Eq.~\eqref{eq:N0} reduces to the original Desilets
+expression.
+
+\paragraph{Supplementary hydrogen inventories.}
+Two additional hydrogen pools can bias $N_0$ estimates but are treated
+as supplementary information rather than modifications to
+Eq.~\eqref{eq:desilets}:
+(i)~soil organic carbon contributes an effective hydrogen equivalent
+$\theta_\mathrm{SOC} \approx 0.55\,\rho_b\,\omega_\mathrm{SOM}$
+[\si{\cubic\metre\per\cubic\metre}] \citep{bogena2017}; and
+(ii)~above-ground biomass water equivalent
+$\mathrm{AGBH} \approx \mathrm{LAI} \times
+\SI{150}{\gram\per\metre\squared}$
+\citep{baatz2015, schron2017}.
+
+% ---------------------------------------------------------------
+\subsection{Topographic Correction \texorpdfstring{$\kT$}{kappa\_topo}}
+\label{sec:kappa_topo}
+% ---------------------------------------------------------------
+
+A CRNS probe on flat, homogeneous terrain sees a reference soil volume
+$V_0 = \pi \rzz^2 \zzz$.
+Real terrain deviates from this ideal, either by presenting extra soil
+(terrain above sensor level) or reduced soil (valleys, cliffs).
+The topographic correction is defined as
+\begin{equation}
+  \kT = \frac{V_\mathrm{eff}}{V_0},
+  \label{eq:kappa_topo_def}
+\end{equation}
+where $V_\mathrm{eff}$ is the $W(r)$-weighted effective soil volume
+actually present.
+
+The pipeline implements a \emph{3-D ray-casting} algorithm.
+For each ray emitted from the sensor at zenith angle $\theta$ and
+azimuth $\phi$, the algorithm computes:
+\begin{enumerate}[nosep]
+  \item The air path length $L_\mathrm{air}$ from sensor to the first
+        DEM intersection, giving the attenuation factor
+        $\exp(-L_\mathrm{air}/\lambda_\mathrm{air})$ with
+        $\lambda_\mathrm{air} = \SI{130}{\gram\per\centi\metre\squared}$
+        / $\rho_\mathrm{air}$.
+  \item The soil path length $L_\mathrm{soil} = \zzz/\cos\alpha$,
+        corrected for the local surface slope angle $\alpha$ via the
+        DEM gradient, giving the production term
+        $1-\exp(-L_\mathrm{soil}/\lambda_\mathrm{soil})$ with
+        $\lambda_\mathrm{soil} = \SI{162}{\gram\per\centi\metre\squared}$
+        / $\rho_b$.
+  \item The angular weight $\cos^2\theta$, accounting for both the
+        Lambert emission pattern and the solid-angle element
+        $\mathrm{d}\Omega = \cos\theta\,\mathrm{d}\theta\,\mathrm{d}\phi$.
+\end{enumerate}
+The ray contribution is
+\begin{equation}
+  \mathrm{d}N \propto
+    \exp\!\Bigl(-\tfrac{L_\mathrm{air}}{\lambda_\mathrm{air}}\Bigr)
+    \Bigl[1-\exp\!\Bigl(-\tfrac{L_\mathrm{soil}}{\lambda_\mathrm{soil}}\Bigr)\Bigr]
+    \cos^2\theta\,,
+  \label{eq:ray}
+\end{equation}
+and $\kT$ is the ratio of the sum over all DEM rays to the sum over
+an equivalent flat reference surface.
+$\kT > 1$ indicates excess terrain (over-estimation of SM without
+correction); $\kT < 1$ indicates missing terrain (under-estimation).
+
+% ---------------------------------------------------------------
+\subsection{Muon Field-of-View Correction \texorpdfstring{$\kM$}{kappa\_muon}}
+\label{sec:kappa_muon}
+% ---------------------------------------------------------------
+
+High-energy cosmic muons arriving at the surface contribute to the
+secondary neutron production via spallation reactions in soil.
+Their differential flux follows $\mathrm{d}N/\mathrm{d}\Omega
+\propto \cos^n\theta_z$ with $n \approx 2$.
+Surrounding terrain that rises above the horizon at elevation angle
+$\psi(\phi)$ blocks all muons with zenith angle
+$\theta_z > 90^\circ - \psi(\phi)$, reducing the effective muon flux.
+
+The muon correction is defined as the ratio of the visible-sky
+integral to the full-hemisphere integral:
+\begin{equation}
+  \kM = \frac{\displaystyle\int_0^{2\pi}
+              \int_0^{\theta_{z,\max}(\phi)}
+              \cos^2\theta_z \sin\theta_z\,\mathrm{d}\theta_z\,\mathrm{d}\phi}
+             {\displaystyle\int_0^{2\pi}
+              \int_0^{\pi/2}
+              \cos^2\theta_z \sin\theta_z\,\mathrm{d}\theta_z\,\mathrm{d}\phi},
+  \label{eq:kappa_muon}
+\end{equation}
+where $\theta_{z,\max}(\phi) = \pi/2 - \psi(\phi)$.
+The azimuthal integral evaluates analytically per bin:
+\begin{equation}
+  f(\phi) = \frac{1 - \cos^3\theta_{z,\max}(\phi)}{3}.
+  \label{eq:kappa_muon_az}
+\end{equation}
+By construction $\kM \leq 1$; it equals 1 on a flat site with no
+surrounding topography.
+
+% ---------------------------------------------------------------
+\subsection{Land-Use/Land-Cover Correction \texorpdfstring{$\kL$}{kappa\_lulc}}
+\label{sec:kappa_lulc}
+% ---------------------------------------------------------------
+
+Non-soil hydrogen sources within the footprint — vegetation water,
+standing water, built structures — modulate neutron moderation.
+Following \citet{schron2017} and \citet{iwema2017}, each land-cover
+class $c$ is assigned a hydrogen equivalence factor $f_H^{(c)}$,
+normalised to bare soil at the reference moisture $\thetav^\mathrm{ref}$.
+The correction is
+\begin{equation}
+  \kL = \frac{\displaystyle\sum_{i\in\mathrm{footprint}}
+              W(r_i)\,f_H^{(c_i)}\,A_i}
+             {\displaystyle\sum_{i\in\mathrm{footprint}}
+              W(r_i)\,A_i},
+  \label{eq:kappa_lulc}
+\end{equation}
+where $A_i$ is the pixel area and $c_i$ its WorldCover class.
+Selected $f_H$ values are listed in Table~\ref{tab:fH}.
+
+\begin{table}[h]
+\centering
+\caption{Hydrogen equivalence factors $f_H$ by land cover class
+(relative to bare soil baseline $f_H = 1$).
+Sources: \citet{schron2017}, \citet{iwema2017}, \citet{franz2012}.}
+\label{tab:fH}
+\begin{tabular}{lcc}
+\toprule
+Land-cover class      & $f_H$ & Notes \\
+\midrule
+Water / wetland       & 4.0 / 2.5 & $\approx 4\times$ soil H \\
+Snow / glacier        & 3.0       & \\
+Tree cover (forest)   & 1.5       & includes canopy water \\
+Shrubland             & 1.15      & \\
+Grassland / cropland  & 0.95–1.00 & \\
+Built-up              & 0.05      & concrete, asphalt \\
+Bare / sparse veg.    & 0.03      & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For the OSM vector layer the baseline contribution of uncovered
+footprint area is computed as
+$f_H^\mathrm{base}\times(\Sigma_\mathrm{DEM} - \Sigma_\mathrm{OSM})$
+where both sums are $W(r)$-weighted integrals, avoiding the
+spatially averaged approximation used in simpler implementations.
+
+% ---------------------------------------------------------------
+\subsection{Site Flux Estimates and \texorpdfstring{$N_0$}{N0}}
+\label{sec:fluxes}
+% ---------------------------------------------------------------
+
+The expected epithermal neutron count rate at the site is
+\begin{equation}
+  N_\mathrm{neut,site} =
+    N_\mathrm{sl}\,f_{R_c}\,
+    \exp\!\bigl[\beta_n\,(P_0 - P)\bigr]\,\kT,
+  \label{eq:Nneut_site}
+\end{equation}
+where $N_\mathrm{sl}$ is the detector-specific sea-level reference
+count, $f_{R_c} = \exp[\alpha_\mathrm{H}(R_c^\mathrm{site}
+- R_c^\mathrm{ref})]$ is the geomagnetic rigidity correction
+\citep{hawdon2014} with $\alpha_\mathrm{H} = -0.075\,\si{\per\giga\volt}$,
+and $\beta_n = \SI{0.0077}{\per\hecto\pascal}$ is the
+barometric coefficient for neutrons.
+The site pressure $P$ follows the standard exponential atmosphere
+with scale height $H = \SI{8500}{\metre}$.
+Rigidity cutoff $R_c$ is retrieved from the Smart \& Shea (2019)
+tables via \texttt{crnpy}.
+
+The full correction chain is
+\begin{equation}
+  \kTot = \kT \cdot \kM \cdot \kL,
+  \label{eq:kappa_tot}
+\end{equation}
+and $N_0$ follows from Eq.~\eqref{eq:N0}.

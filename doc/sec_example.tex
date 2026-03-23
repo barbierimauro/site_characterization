@@ -1,0 +1,199 @@
+% ============================================================
+\section{Worked Example: Italian Alps Test Site}
+\label{sec:example}
+% ============================================================
+
+To illustrate the pipeline output, we apply it to a candidate
+installation site in the Italian Alps: a sub-alpine meadow at
+approximately $46.4^\circ\,$N, $11.3^\circ\,$E, elevation
+\SI{1850}{m\,a.s.l.}
+The site is representative of the challenging conditions that
+motivate careful pre-installation characterisation: significant
+relief, mixed land cover (meadow, sparse conifers, rocky outcrops),
+seasonal snow, and clay-rich soils derived from carbonate--flysch
+geology.
+
+\subsection{Terrain and Topographic Correction}
+
+Figure~\ref{fig:dem_overview} shows the 30-m Copernicus DEM
+mosaicked over the $\pm\SI{500}{m}$ bounding box around the sensor
+location.
+The terrain is characterised by a north-facing slope
+($\sim 8^\circ$ mean slope within $\rzz$) with a prominent ridge to
+the south-east rising approximately \SI{120}{m} above the sensor.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.8\linewidth]{dem_hillshade}
+  \caption{Hillshaded DEM with the $\rzz$ (inner circle) and
+    $3\,\rzz$ (outer circle) footprint boundaries overlaid.
+    The sensor location is marked with a cross.}
+  \label{fig:dem_overview}
+\end{figure}
+
+The 3-D ray-casting algorithm over $18 \times 72$ directions gives
+\begin{equation*}
+  \kT = 0.97,
+\end{equation*}
+indicating that the south-eastern ridge reduces the effective soil
+volume by approximately 3\% relative to a flat reference.
+Without this correction, the Desilets $N_0$ would be overestimated
+by the same margin.
+
+\subsection{Muon Field-of-View Correction}
+
+The horizon profile $\psi(\phi)$ shows a maximum elevation angle of
+$\SI{8.5}{\degree}$ towards azimuth $\SI{145}{\degree}$
+(south-south-east) and is below $\SI{3}{\degree}$ for all other
+azimuths.
+The analytical $\kM$ integral (Eq.~\eqref{eq:kappa_muon}) gives
+\begin{equation*}
+  \kM = 0.992,
+\end{equation*}
+a $0.8\%$ reduction in the effective muon flux.
+This is small but non-negligible at a site with high-precision
+calibration requirements.
+
+\subsection{Land-Use / Land-Cover Correction}
+
+Figure~\ref{fig:lulc_map} shows the ESA WorldCover 2021 map
+reprojected to the DEM grid.
+Within the $\rzz$ circle the land cover is dominated by grassland
+($f_H = 0.95$, \SI{64}{\%} of weighted area), tree cover
+($f_H = 1.50$, \SI{18}{\%}), and bare rock
+($f_H = 0.03$, \SI{11}{\%}).
+A small seasonal stream mapped in OSM ($f_H = 4.0$) covers
+$\SI{0.4}{\%}$ of the $W(r)$-weighted area.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.8\linewidth]{lulc_map}
+  \caption{ESA WorldCover 2021 classification within the
+    $2\,\rzz$ footprint circle, with OSM water features overlaid.
+    The $\rzz$ boundary is the solid white circle.}
+  \label{fig:lulc_map}
+\end{figure}
+
+The weighted $\kL$ (Eq.~\eqref{eq:kappa_lulc}) evaluates to
+\begin{equation*}
+  \kL = 1.08,
+\end{equation*}
+reflecting the net positive hydrogen contribution from tree canopy
+water relative to the bare-soil baseline.
+Without this correction, the calibrated $N_0$ would be
+overestimated by $\sim 8\%$, propagating directly into a
+soil-moisture bias of $\sim \SI{0.02}{\cubic\metre\per\cubic\metre}$.
+
+\subsection{Total Correction and Reference Count}
+
+The total correction factor is
+\begin{equation*}
+  \kTot = \kT \cdot \kM \cdot \kL
+        = 0.97 \times 0.992 \times 1.08
+        = 1.039.
+\end{equation*}
+With a detector-specific sea-level reference count
+$N_\mathrm{sl} = \SI{2800}{\text{cph}}$ and a site rigidity
+cutoff $R_c = \SI{4.2}{\giga\volt}$ (retrieved from \texttt{crnpy}):
+\begin{align*}
+  f_{R_c} &= \exp[\alpha_H (R_c^\mathrm{site} - R_c^\mathrm{ref})]
+           = \exp[-0.075 \times (4.2 - 4.49)] = 1.022, \\
+  N_\mathrm{neut,site} &= 2800 \times 1.022
+    \times \exp[0.0077 \times (1013.25 - 794)] \times 1.039
+    = \SI{3620}{\text{cph}}.
+\end{align*}
+With $\lw = 0.055$ g/g (from SoilGrids clay fraction
+$f_\mathrm{clay} = 0.23$, Eq.~\eqref{eq:lw_clay}):
+\begin{equation*}
+  N_0 = \frac{3620}{0.0808 + 0.372\,/\,(0.055 + 0.115)}
+      = \frac{3620}{0.0808 + 2.188}
+      \approx \SI{1601}{\text{cph}}.
+\end{equation*}
+This value enters the Desilets inversion
+(Eq.~\eqref{eq:desilets_inv}) for all subsequent soil-moisture
+retrievals.
+
+\subsection{Soil Properties and Supplementary Hydrogen Inventory}
+
+Table~\ref{tab:soilprops} summarises the SoilGrids-derived soil
+properties for the 0–30 cm layer.
+
+\begin{table}[h]
+\centering
+\caption{Soil properties at the Italian Alps test site (0–30 cm
+depth-weighted mean, SoilGrids 2.0).}
+\label{tab:soilprops}
+\begin{tabular}{lll}
+\toprule
+Property & Value & Unit \\
+\midrule
+Bulk density $\rho_b$          & 1.18  & \si{g\,cm^{-3}} \\
+Clay fraction $f_\mathrm{clay}$ & 0.23  & g/g \\
+SOC content                    & 28    & \si{g\,kg^{-1}} \\
+Lattice water $\lw$            & 0.055 & g/g \\
+$\theta_\mathrm{SOC}$          & 0.028 & \si{m^3\,m^{-3}} \\
+$z_{86}$ (at $\thetav = 0.20$) & 26    & cm \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Atmospheric and Vegetation Seasonal Climatology}
+
+Figure~\ref{fig:seasonal} shows the monthly climatological
+$\rho_{WV}$, $f_{WV}$, SWE and LAI averaged over 2019–2023.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\linewidth]{seasonal_climatology}
+  \caption{Monthly climatology at the Italian Alps test site.
+    \textit{Top left}: atmospheric water-vapour density
+    $\rho_{WV}$ [\si{g\,m^{-3}}].
+    \textit{Top right}: neutron correction factor $f_{WV}$.
+    \textit{Bottom left}: snow-water equivalent SWE [mm].
+    \textit{Bottom right}: MODIS LAI.}
+  \label{fig:seasonal}
+\end{figure}
+
+Key observations:
+\begin{itemize}[nosep]
+  \item $\rho_{WV}$ ranges from $\sim\SI{3}{\gram\per\cubic\metre}$
+        in January to $\sim\SI{12}{\gram\per\cubic\metre}$ in July,
+        implying an operational $f_{WV}$ variation of 5–6\% between
+        winter and summer.
+  \item SWE exceeds the \SI{150}{mm} opacity threshold in January–March,
+        making those months unsuitable for soil-moisture calibration.
+  \item Peak LAI in July ($\approx 3.2$ m$^2$/m$^2$) gives
+        $\mathrm{AGBH} \approx \SI{480}{\milli\metre}$,
+        equivalent to $\sim\SI{0.048}{\cubic\metre\per\cubic\metre}$
+        additional hydrogen — an important bias term in summer.
+\end{itemize}
+
+\subsection{Optimal Sampling Plan}
+
+Figure~\ref{fig:sampling} shows the recommended 26-point sampling
+plan superimposed on the DEM and the $\rzz(\thetav)$ dynamic-range
+curve.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\linewidth]{sampling_plan}
+  \caption{\textit{Left}: recommended soil sampling locations
+    (filled circles, coloured by ring) overlaid on the hillshaded DEM.
+    Ring radii are $\{0.25, 0.50, 0.75, 1.00\}\times\rzz$.
+    \textit{Right}: footprint radius $\rzz$ as a function of
+    volumetric soil moisture $\thetav$ at site pressure.
+    Dashed line marks the design moisture $\thetav = 0.20$.}
+  \label{fig:sampling}
+\end{figure}
+
+At the design moisture of
+$\thetav = \SI{0.20}{\cubic\metre\per\cubic\metre}$,
+$\rzz = \SI{113}{\metre}$.
+The four sampling rings are therefore located at
+$r = $ \SI{28}, \SI{57}, \SI{85}, \SI{113} m.
+The inner ring (4 points) carries $\Phi_1 / \sum \Phi = 18\%$ of
+the total footprint weight; the outer ring (8 points) carries 32\%.
+The dry-soil extreme ($\thetav \to 0$) gives
+$\rzz \to \SI{188}{\metre}$; at saturation
+($\thetav = 0.45$) $\rzz$ shrinks to $\SI{106}{\metre}$,
+a 44\% dynamic range.

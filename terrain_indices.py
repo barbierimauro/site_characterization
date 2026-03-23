@@ -29,6 +29,10 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import heapq
+import multiprocessing as mp
+import hashlib
+import json
+import os
 
 
 # ===========================================================================
@@ -181,8 +185,96 @@ def _twi_classes(twi, n=5):
 
 
 # ===========================================================================
+# WORKER MULTIPROCESSING — TWI
+# ===========================================================================
+
+def _twi_strip_worker(args):
+    """
+    Calcola fill-depressions + D8 + slope + TWI su una strip orizzontale
+    del DEM già ripulita (nessun NaN).
+
+    Parameters
+    ----------
+    args : tuple (strip_clean, dpx, dpy, slope_min_rad)
+        strip_clean  : 2D array float, sottogriglia di elev_clean
+        dpx, dpy     : risoluzione pixel [m] lungo x e y
+        slope_min_rad: pendenza minima [rad]
+
+    Returns
+    -------
+    twi_strip        : 2D array float
+    slope_deg_strip  : 2D array float
+    drain_area_strip : 2D array float  [m]
+    """
+    strip_clean, dpx, dpy, slope_min_rad = args
+    dx_m       = 0.5 * (dpx + dpy)
+    filled     = _fill_depressions(strip_clean)
+    acc        = _flow_accumulation_d8(filled, dx_m)
+    drain_area = acc * dx_m
+    gy, gx     = np.gradient(strip_clean, dpy, dpx)
+    slope_rad  = np.maximum(np.arctan(np.sqrt(gx**2 + gy**2)), slope_min_rad)
+    twi        = np.log(drain_area / np.tan(slope_rad))
+    return twi, np.degrees(slope_rad), drain_area
+
+
+# ===========================================================================
 # FUNZIONE PUBBLICA 1 — TWI
 # ===========================================================================
+
+def _twi_cache_path(cache_dir, elev, r86, slope_min_rad):
+    """Hash univoco per il DEM e i parametri TWI."""
+    # Usiamo il digest dei valori medi, shape e r86 come fingerprint leggero
+    tag = (f"{elev.shape}_{r86:.1f}_{slope_min_rad:.5f}_"
+           f"{np.nanmean(elev):.4f}_{np.nanstd(elev):.4f}")
+    h = hashlib.sha256(tag.encode()).hexdigest()[:16]
+    return os.path.join(cache_dir, f"twi_cache_{h}.npz")
+
+
+def _save_twi_cache(result, cache_dir, elev, r86, slope_min_rad):
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _twi_cache_path(cache_dir, elev, r86, slope_min_rad)
+    # Salva array e scalari separatamente
+    np.savez_compressed(
+        path,
+        twi_map           = result['twi_map'],
+        twi_class_map     = result['twi_class_map'],
+        twi_class_edges   = result['twi_class_edges'],
+        slope_map_deg     = result['slope_map_deg'],
+        drainage_area_m   = result['drainage_area_m'],
+        twi_class_fracs   = result['twi_class_fractions'],
+    )
+    # scalari in JSON sidecar
+    meta = {k: float(result[k]) for k in (
+        'twi_mean_fp','twi_std_fp','twi_min_fp','twi_max_fp',
+        'twi_weighted','slope_mean_fp_deg','dx_m')}
+    with open(path + ".json", "w") as f:
+        json.dump(meta, f)
+    print(f"   TWI cached -> {path}", flush=True)
+
+
+def _load_twi_cache(cache_dir, elev, r86, slope_min_rad):
+    if cache_dir is None:
+        return None
+    path = _twi_cache_path(cache_dir, elev, r86, slope_min_rad)
+    if not (os.path.exists(path) and os.path.exists(path + ".json")):
+        return None
+    try:
+        d    = np.load(path)
+        meta = json.load(open(path + ".json"))
+        print(f"   TWI loaded from cache: {path}", flush=True)
+        return dict(
+            twi_map             = d['twi_map'],
+            twi_class_map       = d['twi_class_map'],
+            twi_class_edges     = d['twi_class_edges'],
+            slope_map_deg       = d['slope_map_deg'],
+            drainage_area_m     = d['drainage_area_m'],
+            twi_class_fractions = d['twi_class_fracs'],
+            **meta,
+        )
+    except Exception as e:
+        print(f"   TWI cache load failed ({e}), recomputing.", flush=True)
+        return None
+
 
 def compute_twi(
     elev,
@@ -192,6 +284,8 @@ def compute_twi(
     r86,
     slope_min_rad = 0.001,    # pendenza minima per evitare TWI -> inf [rad]
     n_classes     = 5,        # classi TWI per la mappa
+    n_cores       = 1,        # worker multiprocessing
+    cache_dir     = None,     # directory cache; None = no cache
 ):
     """
     Topographic Wetness Index dal DEM.
@@ -234,6 +328,13 @@ def compute_twi(
     """
 
     # ------------------------------------------------------------------ #
+    # Cache: carica se disponibile
+    # ------------------------------------------------------------------ #
+    cached = _load_twi_cache(cache_dir, elev, r86, slope_min_rad)
+    if cached is not None:
+        return cached
+
+    # ------------------------------------------------------------------ #
     # Risoluzione pixel
     # ------------------------------------------------------------------ #
     nr, nc = elev.shape
@@ -244,24 +345,56 @@ def compute_twi(
     dx_m   = 0.5 * (dpx + dpy)
 
     # ------------------------------------------------------------------ #
-    # Pendenza locale
+    # Pulizia NaN globale (fill con nanmean del DEM intero)
     # ------------------------------------------------------------------ #
     elev_clean = np.where(np.isnan(elev), np.nanmean(elev), elev)
-    gy, gx     = np.gradient(elev_clean, dpy, dpx)
-    slope_rad  = np.arctan(np.sqrt(gx**2 + gy**2))
-    slope_rad  = np.maximum(slope_rad, slope_min_rad)
 
     # ------------------------------------------------------------------ #
-    # Filling depressioni + D8 accumulo
+    # Fill + D8 + slope + TWI  (single o parallel)
     # ------------------------------------------------------------------ #
-    filled      = _fill_depressions(elev_clean)
-    acc         = _flow_accumulation_d8(filled, dx_m)
-    drain_area  = acc * dx_m     # area specifica [m] = n_pixel * larghezza_pixel
+    n_cores = max(1, min(int(n_cores), nr))
 
-    # ------------------------------------------------------------------ #
-    # TWI
-    # ------------------------------------------------------------------ #
-    twi = np.log(drain_area / np.tan(slope_rad))
+    if n_cores == 1:
+        # ------- path single-process (originale) ----------------------- #
+        gy, gx        = np.gradient(elev_clean, dpy, dpx)
+        slope_rad     = np.maximum(np.arctan(np.sqrt(gx**2 + gy**2)), slope_min_rad)
+        filled        = _fill_depressions(elev_clean)
+        acc           = _flow_accumulation_d8(filled, dx_m)
+        drain_area    = acc * dx_m
+        twi           = np.log(drain_area / np.tan(slope_rad))
+        slope_deg_map = np.degrees(slope_rad)
+    else:
+        # ------- path multiprocessing (strip orizzontali con overlap) -- #
+        # L'overlap permette al D8 di ricevere il contributo di flusso
+        # dai pixel a monte appartenenti alla strip adiacente.
+        # Valore empirico: max(20 px, nr/(n_cores*4)).
+        overlap    = min(max(20, nr // (n_cores * 4)), nr // 2)
+        row_splits = np.array_split(np.arange(nr), n_cores)
+
+        strip_args = []
+        boundaries = []   # (full_r0, full_r1, v0_in_strip, v1_in_strip)
+        for rows in row_splits:
+            r0, r1 = int(rows[0]), int(rows[-1]) + 1
+            s0, s1 = max(0, r0 - overlap), min(nr, r1 + overlap)
+            strip_args.append((
+                elev_clean[s0:s1, :].copy(),
+                dpx, dpy, slope_min_rad,
+            ))
+            boundaries.append((r0, r1, r0 - s0, r1 - s0))
+
+        print(f"   TWI: {n_cores} strips (overlap {overlap} px) ...", flush=True)
+        ctx = mp.get_context('fork')
+        with ctx.Pool(n_cores) as pool:
+            results = pool.map(_twi_strip_worker, strip_args)
+
+        twi           = np.full((nr, nc), np.nan)
+        slope_deg_map = np.full((nr, nc), np.nan)
+        drain_area    = np.full((nr, nc), np.nan)
+        for (r0, r1, v0, v1), (twi_s, slope_s, drain_s) in zip(boundaries, results):
+            twi[r0:r1, :]           = twi_s[v0:v1, :]
+            slope_deg_map[r0:r1, :] = slope_s[v0:v1, :]
+            drain_area[r0:r1, :]    = drain_s[v0:v1, :]
+
     twi[np.isnan(elev)] = np.nan
 
     # ------------------------------------------------------------------ #
@@ -290,10 +423,9 @@ def compute_twi(
         for c in range(1, n_classes + 1)
     ])
 
-    slope_deg_map = np.degrees(slope_rad)
     slope_mean_fp = float(np.nanmean(slope_deg_map[fp_mask]))
 
-    return dict(
+    result = dict(
         twi_map              = twi,
         twi_class_map        = cls_map,
         twi_class_edges      = edges,
@@ -309,6 +441,8 @@ def compute_twi(
         slope_mean_fp_deg    = slope_mean_fp,
         dx_m                 = dx_m,
     )
+    _save_twi_cache(result, cache_dir, elev, r86, slope_min_rad)
+    return result
 
 
 def report_twi(res):

@@ -54,6 +54,7 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import requests
+import hashlib, json, os
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,85 @@ import requests
 # ---------------------------------------------------------------------------
 
 SOILGRIDS_URL    = "https://rest.soilgrids.org/soilgrids/v2.0/properties/query"
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _to_serializable(obj):
+    """Converti ricorsivamente numpy types in tipi JSON-serializzabili."""
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_serializable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    return obj
+
+
+def _from_serializable(obj):
+    """Riconverti liste in numpy array dove i valori della chiave lo indicano."""
+    if isinstance(obj, dict):
+        return {k: _from_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        # Liste di numeri → array numpy
+        if obj and isinstance(obj[0], (int, float)):
+            return np.array(obj)
+        return [_from_serializable(v) for v in obj]
+    return obj
+
+
+def _soil_cache_path(lat, lon, z86_cm, cache_dir):
+    tag = f"{lat:.6f}_{lon:.6f}_{z86_cm:.2f}"
+    key = hashlib.sha256(tag.encode()).hexdigest()[:16]
+    return os.path.join(cache_dir, f"soil_cache_{key}.json")
+
+
+def _save_soil_cache(result, lat, lon, z86_cm, cache_dir):
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _soil_cache_path(lat, lon, z86_cm, cache_dir)
+    payload = dict(lat=lat, lon=lon, z86_cm=z86_cm,
+                   data=_to_serializable(result))
+    with open(path, "w") as f:
+        json.dump(payload, f)
+    print(f"   SoilGrids cached -> {path}", flush=True)
+
+
+def _cache_is_valid(data):
+    """
+    Restituisce False se il risultato in cache ha tutti i valori NaN
+    (run precedente fallita), in modo da forzare un nuovo fetch.
+    """
+    for prop in ('bdod', 'clay', 'sand'):
+        key = f'{prop}_crns'
+        v = data.get(key)
+        if v is not None and not (isinstance(v, float) and np.isnan(v)):
+            return True
+    return False
+
+
+def _load_soil_cache(lat, lon, z86_cm, cache_dir):
+    path = _soil_cache_path(lat, lon, z86_cm, cache_dir)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        d = json.load(f)
+    if (abs(d["lat"] - lat) > 1e-7 or abs(d["lon"] - lon) > 1e-7
+            or abs(d["z86_cm"] - z86_cm) > 0.01):
+        return None
+    result = _from_serializable(d["data"])
+    if not _cache_is_valid(result):
+        print(f"   SoilGrids cache invalida (tutti NaN) — nuovo fetch: {path}",
+              flush=True)
+        os.remove(path)
+        return None
+    print(f"   SoilGrids loaded from cache: {path}", flush=True)
+    return result
 
 LAMBDA_S_GCM2    = 162.0    # attenuation length in soil [g/cm²]
 
@@ -118,7 +198,7 @@ def _layer_weights(rho_b_gcm3, lambda_s_gcm2=LAMBDA_S_GCM2):
     -------
     weights : array (6,), normalizzati a somma 1
     """
-    lam = lambda_s_gcm2 / rho_b_gcm3   # [cm]
+    lam = lambda_s_gcm2 / max(rho_b_gcm3, 0.01)   # [cm] — guard against zero/negative bdod
     w   = (np.exp(-DEPTH_TOPS / lam)
            - np.exp(-DEPTH_BOTS / lam))
     w   = np.maximum(w, 0.0)
@@ -146,6 +226,168 @@ def _lattice_water(clay_pct):
     clay_pct: percentuale di argilla [%]
     """
     return float(0.097 * (clay_pct / 100.0) + 0.033)
+
+
+def _saxton_rawls_2006(sand_pct, clay_pct, soc_g_kg, cfvo_pct=0.0):
+    """
+    Pedotransfer functions di Saxton & Rawls (2006) per stimare i parametri
+    idrologici del suolo da tessitura e carbonio organico.
+
+    Stima θ_WP (punto di appassimento, -1500 kPa),
+         θ_FC  (capacità di campo, -33 kPa),
+         θ_sat (saturazione, ~0 kPa).
+
+    La correzione per scheletro (cfvo) riduce proporzionalmente le capacità:
+        θ_x_bulk = θ_x_fine * (1 - cfvo_pct/100)
+
+    Parameters
+    ----------
+    sand_pct  : sabbia [%], valore tipico 5–90
+    clay_pct  : argilla [%], valore tipico 5–60
+    soc_g_kg  : carbonio organico [g/kg] (da SoilGrids, media pesata CRNS)
+    cfvo_pct  : scheletro [%] (coarse fragments volume, da SoilGrids)
+
+    Returns
+    -------
+    dict con:
+        theta_wp    [m³/m³]  punto di appassimento
+        theta_fc    [m³/m³]  capacità di campo
+        theta_sat   [m³/m³]  saturazione
+        delta_theta [m³/m³]  = theta_fc - theta_wp  (range SM utile)
+        om_pct      [%]      materia organica (SOC * 1.724)
+
+    Reference
+    ---------
+    Saxton, K.E., Rawls, W.J. (2006). Soil Water Characteristic Estimates
+    by Texture and Organic Matter for Hydrologic Solutions.
+    Soil Sci. Soc. Am. J., 70, 1569–1578.
+    """
+    if any(np.isnan(v) for v in [sand_pct, clay_pct, soc_g_kg]):
+        return dict(theta_wp=np.nan, theta_fc=np.nan, theta_sat=np.nan,
+                    delta_theta=np.nan, om_pct=np.nan)
+
+    S  = np.clip(sand_pct, 1.0, 98.0) / 100.0   # fraction
+    C  = np.clip(clay_pct, 1.0, 60.0) / 100.0   # fraction
+    OM = float(np.clip(soc_g_kg, 0.0, 150.0) / 10.0 * 1.724)  # % OM
+
+    # --- Wilting point (1500 kPa) ---
+    t1500t = (0.031 - 0.024*S + 0.487*C + 0.006*OM
+              + 0.005*S*OM - 0.013*C*OM + 0.068*S*C)
+    theta_wp = t1500t + (0.14 * t1500t - 0.02)
+
+    # --- Field capacity (33 kPa) ---
+    t33t   = (0.299 - 0.251*S + 0.195*C + 0.011*OM
+              + 0.006*S*OM - 0.027*C*OM + 0.452*S*C)
+    theta_fc = t33t + (1.283 * t33t**2 - 0.374 * t33t - 0.015)
+
+    # --- Saturation ---
+    tst      = (0.278*S + 0.034*C + 0.022*OM
+                - 0.018*S*OM - 0.027*C*OM - 0.584*S*C + 0.078)
+    theta_sat = tst + (0.636*tst - 0.107)
+
+    # Clamp values a range fisicamente plausibili
+    theta_wp  = float(np.clip(theta_wp,  0.01, 0.40))
+    theta_fc  = float(np.clip(theta_fc,  theta_wp + 0.01, 0.55))
+    theta_sat = float(np.clip(theta_sat, theta_fc + 0.01, 0.65))
+
+    # Correzione per scheletro (coarse fragments)
+    fine_frac = 1.0 - float(np.clip(cfvo_pct, 0.0, 70.0)) / 100.0
+    theta_wp  *= fine_frac
+    theta_fc  *= fine_frac
+    theta_sat *= fine_frac
+
+    return dict(
+        theta_wp    = theta_wp,
+        theta_fc    = theta_fc,
+        theta_sat   = theta_sat,
+        delta_theta = theta_fc - theta_wp,
+        om_pct      = OM,
+    )
+
+
+def _parse_soilgrids_tiff(content):
+    """
+    Estrae il valore dal pixel centrale di un GeoTIFF SoilGrids WCS.
+    Verifica il magic TIFF prima di tentare PIL; in caso di risposta XML
+    (errore server) restituisce None invece di propagare un'eccezione.
+    """
+    # Magic bytes TIFF: 'II' (little-endian) o 'MM' (big-endian)
+    if len(content) < 4 or content[:2] not in (b'II', b'MM'):
+        return None   # risposta XML di errore, non un TIFF
+    try:
+        from PIL import Image
+        import io as _io
+        arr = np.array(Image.open(_io.BytesIO(content)))
+        # Pixel centrale (la risposta può essere un piccolo raster, non 1×1)
+        r, c = arr.shape[0] // 2, arr.shape[1] // 2
+        val  = float(arr[r, c])
+        return None if val <= -32767 else val
+    except Exception:
+        return None
+
+
+def _fetch_soilgrids_wcs(lat, lon, timeout_s=60):
+    """
+    Fetch SoilGrids v2.0 via WCS (maps.isric.org) — fallback quando
+    rest.soilgrids.org non è raggiungibile.
+
+    Usa il formato corretto ISRIC WCS 2.0.1:
+      SUBSET=long(lon0,lon1)  SUBSET=lat(lat0,lat1)
+      SUBSETTINGCRS=EPSG:4326  FORMAT=GEOTIFF_INT16
+
+    Ritorna un dict layer_by_name compatibile con _parse_layer().
+    Esegue ~54 request in parallelo (max 20 worker).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    eps  = 0.005   # ±0.005° ≈ ±500 m; copre ≥1 pixel SoilGrids a 250 m
+    lon0, lon1 = lon - eps, lon + eps
+    lat0, lat1 = lat - eps, lat + eps
+
+    def fetch_one(prop, depth_label):
+        # requests accetta lista di tuple → supporta chiavi duplicate (SUBSET×2)
+        params = [
+            ("map",           f"/map/{prop}.map"),
+            ("SERVICE",       "WCS"),
+            ("VERSION",       "2.0.1"),
+            ("REQUEST",       "GetCoverage"),
+            ("COVERAGEID",    f"{prop}_{depth_label}_mean"),
+            ("FORMAT",        "GEOTIFF_INT16"),
+            ("SUBSETTINGCRS", "urn:ogc:def:crs:EPSG::4326"),
+            ("SUBSET",        f"long({lon0:.6f},{lon1:.6f})"),
+            ("SUBSET",        f"lat({lat0:.6f},{lat1:.6f})"),
+        ]
+        resp = requests.get("https://maps.isric.org/mapserv",
+                            params=params, timeout=timeout_s)
+        resp.raise_for_status()
+        return _parse_soilgrids_tiff(resp.content)
+
+    raw = {}
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        futures = {
+            ex.submit(fetch_one, p, d): (p, d)
+            for p in PROPERTIES for d in DEPTH_LABELS
+        }
+        for fut in as_completed(futures):
+            p, d = futures[fut]
+            try:
+                val = fut.result()
+            except Exception as exc:
+                print(f"   WCS warn: {p} {d} — {exc}", flush=True)
+                val = None
+            raw.setdefault(p, {})[d] = val
+
+    # Costruisce dict compatibile con _parse_layer()
+    layer_by_name = {}
+    for prop in PROPERTIES:
+        depths_list = [
+            {'label': d,
+             'values': {'mean': raw.get(prop, {}).get(d), 'uncertainty': None}}
+            for d in DEPTH_LABELS
+        ]
+        layer_by_name[prop] = {'name': prop, 'depths': depths_list}
+
+    return layer_by_name
 
 
 def _parse_layer(layer_json, cf):
@@ -186,6 +428,7 @@ def get_soil_properties(
     z86_cm      = 16.0,    # profondità di penetrazione neutroni [cm]
                             # usata per calcolare i pesi degli strati
     timeout_s   = 60,
+    cache_dir   = None,    # directory per cache locale
 ):
     """
     Recupera le proprietà del suolo da SoilGrids v2.0 per il punto (lat, lon).
@@ -233,6 +476,11 @@ def get_soil_properties(
         'soilgrids_version'  : str
     """
 
+    if cache_dir is not None:
+        cached = _load_soil_cache(lat, lon, z86_cm, cache_dir)
+        if cached is not None:
+            return cached
+
     # ------------------------------------------------------------------ #
     # 1. Chiamata API SoilGrids
     # ------------------------------------------------------------------ #
@@ -247,17 +495,19 @@ def get_soil_properties(
         'value'    : 'mean,uncertainty',
     }
 
-    resp = requests.get(SOILGRIDS_URL, params=params, timeout=timeout_s)
-    resp.raise_for_status()
-    data = resp.json()
-
-    # ------------------------------------------------------------------ #
-    # 2. Parsing risposta
-    # ------------------------------------------------------------------ #
-    layers_json = data['properties']['layers']
-
-    # Indicizza per nome proprietà
-    layer_by_name = {lay['name']: lay for lay in layers_json}
+    wrb_class = 'N/A'
+    try:
+        resp = requests.get(SOILGRIDS_URL, params=params, timeout=timeout_s)
+        resp.raise_for_status()
+        data = resp.json()
+        layers_json   = data['properties']['layers']
+        layer_by_name = {lay['name']: lay for lay in layers_json}
+        wrb_class     = data.get('wrb_class_name', 'N/A')
+    except (requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout) as exc:
+        print(f"   REST non raggiungibile ({exc.__class__.__name__}),"
+              " fallback WCS maps.isric.org ...", flush=True)
+        layer_by_name = _fetch_soilgrids_wcs(lat, lon, timeout_s)
 
     # ------------------------------------------------------------------ #
     # 3. Estrai profili per ogni proprietà
@@ -290,6 +540,8 @@ def get_soil_properties(
     bdod_top3 = profiles['bdod']['mean'][:3]   # 0-5, 5-15, 15-30 cm
     valid      = bdod_top3[~np.isnan(bdod_top3)]
     rho_b_for_weights = float(np.mean(valid)) if len(valid) > 0 else 1.4
+    if rho_b_for_weights <= 0:
+        rho_b_for_weights = 1.4   # WCS restituisce 0 per zone senza dati
 
     weights = _layer_weights(rho_b_for_weights)
 
@@ -326,6 +578,24 @@ def get_soil_properties(
     result['lattice_water_gg'] = lw
 
     # ------------------------------------------------------------------ #
+    # 6b. Saxton & Rawls (2006) pedotransfer: θ_WP, θ_FC, θ_sat
+    # ------------------------------------------------------------------ #
+    soc_crns  = result.get('soc_crns', np.nan)
+    cfvo_crns = result.get('cfvo_crns', np.nan)
+    cfvo_for_sr = cfvo_crns if not np.isnan(cfvo_crns) else 0.0
+    sr = _saxton_rawls_2006(
+        sand_pct  = result.get('sand_crns', np.nan),
+        clay_pct  = clay_crns,
+        soc_g_kg  = soc_crns,
+        cfvo_pct  = cfvo_for_sr,
+    )
+    result['theta_wp']     = sr['theta_wp']
+    result['theta_fc']     = sr['theta_fc']
+    result['theta_sat']    = sr['theta_sat']
+    result['delta_theta']  = sr['delta_theta']
+    result['om_pct']       = sr['om_pct']
+
+    # ------------------------------------------------------------------ #
     # 7. Classificazione tessitura USDA
     # ------------------------------------------------------------------ #
     sand_m = result.get('sand_crns', np.nan)
@@ -336,7 +606,7 @@ def get_soil_properties(
     # ------------------------------------------------------------------ #
     # 8. WRB soil class (se disponibile nella risposta)
     # ------------------------------------------------------------------ #
-    result['wrb_class'] = data.get('wrb_class_name', 'N/A')
+    result['wrb_class'] = wrb_class
 
     # ------------------------------------------------------------------ #
     # 9. Metadata
@@ -349,6 +619,8 @@ def get_soil_properties(
     result['source']           = 'SoilGrids v2.0 ISRIC 250m'
     result['soilgrids_version']= '2.0'
 
+    if cache_dir is not None:
+        _save_soil_cache(result, lat, lon, z86_cm, cache_dir)
     return result
 
 
@@ -443,6 +715,18 @@ def report_soil_properties(res):
 
     L.append("")
     L.append("  Uncertainty = propagated std on CRNS-weighted mean")
+
+    # Saxton & Rawls pedotransfer
+    if not np.isnan(res.get('theta_fc', np.nan)):
+        L.append("")
+        L.append("  Saxton & Rawls (2006) pedotransfer — SM thresholds:")
+        L.append(f"    OM          : {res['om_pct']:.2f} %  (SOC × 1.724)")
+        L.append(f"    θ_WP        : {res['theta_wp']:.3f} m³/m³  (wilting point, -1500 kPa)")
+        L.append(f"    θ_FC        : {res['theta_fc']:.3f} m³/m³  (field capacity, -33 kPa)")
+        L.append(f"    θ_sat       : {res['theta_sat']:.3f} m³/m³  (saturation)")
+        L.append(f"    Δθ usabile  : {res['delta_theta']:.3f} m³/m³  (θ_FC - θ_WP)")
+        L.append(f"    (coarse frag. {res.get('cfvo_crns', float('nan')):.1f}% già inclusi)")
+
     L.append("=" * w)
     return "\n".join(L)
 

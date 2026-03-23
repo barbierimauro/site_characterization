@@ -1,0 +1,98 @@
+% ============================================================
+\section{List of Variables and Constants}
+\label{app:vars}
+% ============================================================
+
+Table~\ref{tab:variables} lists all symbols used in this technical
+note with their definitions, units, and the section or equation
+where they are first introduced.
+
+\begin{table}[H]
+\centering
+\caption{Variables and constants used in this note.}
+\label{tab:variables}
+\small
+\begin{tabularx}{\linewidth}{llXl}
+\toprule
+Symbol & Unit & Definition & Reference \\
+\midrule
+\multicolumn{4}{l}{\textit{Footprint geometry}} \\
+$\rzz$     & m & Radius enclosing 86\% of neutron signal
+                 & Eq.~\eqref{eq:r86} \\
+$\zzz$     & cm & Depth enclosing 86\% of neutron signal
+                 & Eq.~\eqref{eq:z86} \\
+$W(r)$     & -- & Radial sensitivity weight at distance $r$
+                 & Eq.~\eqref{eq:Wr} \\
+$A_1$      & m\,m$^3$\,m$^{-3}$ & Footprint radius coefficient ($= 29.13$)
+                 & Eq.~\eqref{eq:r86} \\
+$A_2$      & m$^3$\,m$^{-3}$ & Footprint offset ($= 0.0578$)
+                 & Eq.~\eqref{eq:r86} \\
+\midrule
+\multicolumn{4}{l}{\textit{Soil and hydrogen properties}} \\
+$\thetav$  & m$^3$\,m$^{-3}$ & Volumetric liquid soil water content
+                 & Sec.~\ref{sec:theory} \\
+$\lw$      & g\,g$^{-1}$ & Clay-mineral lattice water content
+                 & Eq.~\eqref{eq:lw_clay} \\
+$\rho_b$   & g\,cm$^{-3}$ & Dry soil bulk density
+                 & Eq.~\eqref{eq:z86} \\
+$f_\mathrm{clay}$ & g\,g$^{-1}$ & Clay mass fraction of soil
+                 & Eq.~\eqref{eq:lw_clay} \\
+$\theta_\mathrm{SOC}$ & m$^3$\,m$^{-3}$ & Hydrogen equivalent of SOC
+                 & Eq.~\eqref{eq:thetaSOC} \\
+$\omega_\mathrm{SOM}$ & g\,g$^{-1}$ & Soil organic matter mass fraction
+                 & Eq.~\eqref{eq:thetaSOC} \\
+\midrule
+\multicolumn{4}{l}{\textit{Desilets calibration}} \\
+$N$        & cph & Measured neutron count rate & Eq.~\eqref{eq:desilets} \\
+$N_0$      & cph & Reference count at zero liquid water
+                 & Eq.~\eqref{eq:N0} \\
+$a_0$      & -- & Desilets parameter ($= 0.0808$) & Eq.~\eqref{eq:desilets} \\
+$a_1$      & -- & Desilets parameter ($= 0.372$)  & Eq.~\eqref{eq:desilets} \\
+$a_2$      & m$^3$\,m$^{-3}$ & Desilets parameter ($= 0.115$)
+                 & Eq.~\eqref{eq:desilets} \\
+\midrule
+\multicolumn{4}{l}{\textit{Correction factors}} \\
+$\kT$      & -- & Topographic correction & Eq.~\eqref{eq:kappa_topo_def} \\
+$\kM$      & -- & Muon field-of-view correction & Eq.~\eqref{eq:kappa_muon} \\
+$\kL$      & -- & Land-use/land-cover correction & Eq.~\eqref{eq:kappa_lulc} \\
+$\kTot$    & -- & Total site correction ($= \kT\kM\kL$) & Eq.~\eqref{eq:kappa_tot} \\
+$f_H^{(c)}$ & -- & Hydrogen equivalence factor for class $c$ & Tab.~\ref{tab:fH} \\
+\midrule
+\multicolumn{4}{l}{\textit{Ray-casting (topographic correction)}} \\
+$\theta$   & rad & Zenith angle of ray & Eq.~\eqref{eq:ray} \\
+$\phi$     & rad & Azimuth angle of ray & Eq.~\eqref{eq:ray} \\
+$\alpha$   & rad & Local surface slope angle & Eq.~\eqref{eq:ray} \\
+$L_\mathrm{air}$ & g\,cm$^{-2}$ & Air mass path length of ray & Eq.~\eqref{eq:ray} \\
+$L_\mathrm{soil}$ & g\,cm$^{-2}$ & Soil path length of ray & Eq.~\eqref{eq:ray} \\
+$\lambda_\mathrm{air}$ & g\,cm$^{-2}$ & Neutron attenuation length in air ($= 130$) & Eq.~\eqref{eq:ray} \\
+$\lambda_\mathrm{soil}$ & g\,cm$^{-2}$ & Neutron attenuation length in soil ($= 162$) & Eq.~\eqref{eq:ray} \\
+\midrule
+\multicolumn{4}{l}{\textit{Muon correction}} \\
+$\theta_z$ & rad & Muon zenith angle & Eq.~\eqref{eq:kappa_muon} \\
+$\psi(\phi)$ & rad & Horizon elevation angle at azimuth $\phi$ & Eq.~\eqref{eq:kappa_muon} \\
+$\theta_{z,\max}(\phi)$ & rad & Max unblocked muon zenith at $\phi$ & Eq.~\eqref{eq:kappa_muon} \\
+\midrule
+\multicolumn{4}{l}{\textit{Site flux and pressure}} \\
+$N_\mathrm{neut,site}$ & cph & Expected neutron count at site & Eq.~\eqref{eq:Nneut_site} \\
+$N_\mathrm{sl}$ & cph & Sea-level detector reference count & Eq.~\eqref{eq:Nneut_site} \\
+$P$        & hPa & Site pressure & Eq.~\eqref{eq:Nneut_site} \\
+$P_0$      & hPa & Reference pressure ($= 1013.25$) & Eq.~\eqref{eq:r86} \\
+$\beta_n$  & hPa$^{-1}$ & Barometric coefficient ($= 0.0077$) & Eq.~\eqref{eq:Nneut_site} \\
+$R_c$      & GV & Geomagnetic rigidity cutoff & Eq.~\eqref{eq:Nneut_site} \\
+$f_{R_c}$  & -- & Rigidity correction factor & Eq.~\eqref{eq:Nneut_site} \\
+$\alpha_H$ & GV$^{-1}$ & Rigidity coefficient ($= -0.075$) & Eq.~\eqref{eq:Nneut_site} \\
+\midrule
+\multicolumn{4}{l}{\textit{Supplementary corrections}} \\
+$\rho_{WV}$ & g\,m$^{-3}$ & Atmospheric water vapour density & Eq.~\eqref{eq:rhoWV} \\
+$f_{WV}$   & -- & Water-vapour neutron correction & Eq.~\eqref{eq:fWV} \\
+$\alpha_{WV}$ & m$^3$\,g$^{-1}$ & WV correction coefficient ($= 0.0054$) & Eq.~\eqref{eq:fWV} \\
+$\mathrm{SWE}$ & mm & Snow-water equivalent & Eq.~\eqref{eq:swe} \\
+$\mathrm{AGBH}$ & mm & Above-ground biomass hydrogen equivalent & Eq.~\eqref{eq:agbh} \\
+\midrule
+\multicolumn{4}{l}{\textit{Terrain indices}} \\
+$\mathrm{TWI}$ & -- & Topographic Wetness Index & Eq.~\eqref{eq:twi} \\
+$A_s$      & m & Specific upslope drainage area & Eq.~\eqref{eq:twi} \\
+$\beta$    & rad & Local slope angle & Eq.~\eqref{eq:twi} \\
+\bottomrule
+\end{tabularx}
+\end{table}
