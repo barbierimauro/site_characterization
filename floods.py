@@ -179,36 +179,32 @@ def flow_direction_d8(filled):
     Calcola flow direction D8 (codice potenza di 2).
     Cella piatta o bordo → 0.
     """
-    nr, nc   = filled.shape
-    flowdir  = np.zeros((nr, nc), dtype=np.uint8)
+    nr, nc    = filled.shape
+    flowdir   = np.zeros((nr, nc), dtype=np.uint8)
+    max_slope = np.full((nr, nc), -np.inf, dtype=np.float64)
+    max_code  = np.zeros((nr, nc), dtype=np.uint8)
 
-    # Vettorizzato per riga
     for idx, (dr, dc, dist) in enumerate(D8_DIRS):
-        r_src = np.arange(max(0,-dr), min(nr, nr-dr))
-        c_src = np.arange(max(0,-dc), min(nc, nc-dc))
-        r_nbr = r_src + dr
-        c_nbr = c_src + dc
+        r0, r1 = max(0, -dr), min(nr, nr - dr)
+        c0, c1 = max(0, -dc), min(nc, nc - dc)
+        r_src  = np.arange(r0, r1)
+        c_src  = np.arange(c0, c1)
 
-        z_src = filled[np.ix_(r_src, c_src)]
-        z_nbr = filled[np.ix_(r_nbr, c_nbr)]
-        slope = (z_src - z_nbr) / dist
+        z_src  = filled[np.ix_(r_src, c_src)]
+        z_nbr  = filled[np.ix_(r_src + dr, c_src + dc)]
+        slope  = (z_src - z_nbr) / dist
 
-        # Aggiorna dove questo è il massimo drop
-        if idx == 0:
-            max_slope = slope.copy()
-            max_code  = np.full_like(slope, D8_CODES[0],
-                                     dtype=np.uint8)
-        else:
-            better = slope > max_slope
-            max_slope[better] = slope[better]
-            max_code[better]  = D8_CODES[idx]
+        # Aggiorna max_slope / max_code sulla griglia full-size
+        s_cur  = max_slope[np.ix_(r_src, c_src)]
+        better = slope > s_cur
+        max_slope[np.ix_(r_src, c_src)] = np.where(better, slope, s_cur)
+        c_cur  = max_code[np.ix_(r_src, c_src)]
+        max_code[np.ix_(r_src, c_src)]  = np.where(
+            better, np.uint8(D8_CODES[idx]), c_cur).astype(np.uint8)
 
-        if idx == len(D8_DIRS)-1:
-            # Scrivi solo dove c'è un drop positivo
-            valid = max_slope > 0
-            rows  = np.ix_(r_src, c_src)
-            flowdir[rows][valid] = max_code[valid]
-
+    # Scrivi flowdir dove c'è un drop positivo
+    pos = max_slope > 0
+    flowdir[pos] = max_code[pos]
     return flowdir
 
 
@@ -297,43 +293,50 @@ def network_to_lines(network, lats_1d, lons_1d):
 def compute_hand(filled, flowdir, network, verbose=True):
     """
     HAND = quota DEM - quota del canale più vicino a valle.
-    Segue il flow path da ogni pixel fino al primo canale.
+    Implementazione O(n) con BFS inverso dai canali upstream.
+    Per ogni pixel la HAND è la sua quota meno la quota del
+    canale a cui è idrologicamente connesso (seguendo D8 a valle).
     """
-    nr, nc   = filled.shape
-    hand     = np.full((nr, nc), np.nan, dtype=np.float32)
+    from collections import deque
+    nr, nc      = filled.shape
+    hand        = np.full((nr, nc), np.nan, dtype=np.float32)
+    chan_elev   = np.full((nr, nc), np.nan, dtype=np.float64)
     code_to_dir = {D8_CODES[i]: D8_DIRS[i][:2]
                    for i in range(len(D8_CODES))}
 
-    # Per ogni pixel non-canale, segui il flow path
-    # finché non raggiungi un canale o il bordo
-    MAX_STEPS = nr + nc
-
+    # Costruisci adiacenza inversa: rev[r*nc+c] = lista pixel che
+    # confluiscono in (r,c) secondo D8
+    rev = [[] for _ in range(nr * nc)]
     for r in range(nr):
-        for c_idx in range(nc):
-            if network[r, c_idx]:
-                hand[r, c_idx] = 0.0
+        for c in range(nc):
+            code = int(flowdir[r, c])
+            if code == 0:
                 continue
-            # Segui il percorso a valle
-            cr, cc  = r, c_idx
-            z_src   = float(filled[r, c_idx])
-            found   = False
-            for _ in range(MAX_STEPS):
-                code = int(flowdir[cr, cc])
-                if code == 0:
-                    break
-                dr, dc = code_to_dir.get(code, (0,0))
-                cr += dr; cc += dc
-                if cr < 0 or cr >= nr or cc < 0 or cc >= nc:
-                    break
-                if network[cr, cc]:
-                    hand[r, c_idx] = max(
-                        0.0, z_src - float(filled[cr, cc]))
-                    found = True
-                    break
-            if not found:
-                hand[r, c_idx] = np.nan
+            dr, dc = code_to_dir.get(code, (0, 0))
+            rn, cn = r + dr, c + dc
+            if 0 <= rn < nr and 0 <= cn < nc:
+                rev[rn * nc + cn].append((r, c))
 
-    valid = np.sum(~np.isnan(hand))
+    # BFS partendo dai pixel-canale
+    q = deque()
+    for r in range(nr):
+        for c in range(nc):
+            if network[r, c]:
+                hand[r, c]      = 0.0
+                chan_elev[r, c] = float(filled[r, c])
+                q.append((r, c))
+
+    while q:
+        r, c = q.popleft()
+        ce   = chan_elev[r, c]
+        for ru, cu in rev[r * nc + c]:
+            if np.isnan(hand[ru, cu]):
+                hand[ru, cu]      = max(0.0,
+                                        float(filled[ru, cu]) - ce)
+                chan_elev[ru, cu] = ce
+                q.append((ru, cu))
+
+    valid = int(np.sum(~np.isnan(hand)))
     if verbose:
         print(f"   HAND: valid={valid}  "
               f"median={float(np.nanmedian(hand)):.1f}m  "
