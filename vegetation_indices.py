@@ -30,17 +30,24 @@ Email       : mauro.barbieri@pm.me
 import os
 import json
 import hashlib
+import itertools
 import warnings
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime, timezone
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# Limit GDAL in-memory cache to 128 MB to avoid OOM crashes under WSL
-# when downloading many COG scenes in parallel.  Must be set before any
-# rasterio / GDAL import.
+# GDAL / network tuning – must be set before any rasterio / GDAL import.
+# GDAL_CACHEMAX: 128 MB cap to avoid OOM under WSL with parallel COG reads.
+# CPL_VSIL_CURL_CHUNK_SIZE: 2 MB chunks → fewer round-trips per windowed read.
+# GDAL_HTTP_MULTIPLEX: HTTP/2 multiplexing – all 5 band requests per scene
+#   share one TCP connection, cutting latency significantly.
+# GDAL_HTTP_MERGE_CONSECUTIVE_RANGES: coalesces adjacent range requests.
 os.environ.setdefault("GDAL_CACHEMAX", "128")
-os.environ.setdefault("CPL_VSIL_CURL_CHUNK_SIZE", "524288")   # 512 KB chunks
+os.environ.setdefault("CPL_VSIL_CURL_CHUNK_SIZE", "2097152")   # 2 MB chunks
+os.environ.setdefault("GDAL_HTTP_MULTIPLEX", "YES")
+os.environ.setdefault("GDAL_HTTP_MERGE_CONSECUTIVE_RANGES", "YES")
 
 # ---------------------------------------------------------------------------
 # Costanti fisiche
@@ -68,7 +75,8 @@ MODIS_START_YEAR   = 2020
 
 PC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
-N_WORKERS = 2   # thread paralleli per download (>2 causa OOM sotto WSL)
+N_WORKERS = 3   # thread paralleli per download; sliding-window limita i future in volo
+PARALLEL_WINDOW = N_WORKERS * 3  # max future in volo contemporaneamente (evita OOM)
 
 
 # ---------------------------------------------------------------------------
@@ -507,10 +515,10 @@ def get_vegetation_indices(
         print(f"  {len(items_ls)} new Landsat scenes to download",
               flush=True)
 
-    # --- Download sequenziale a batch per evitare OOM ---
-    # ThreadPoolExecutor creava tutti i future in memoria simultaneamente;
-    # qui processiamo una scena alla volta e salviamo la cache ogni BATCH_SIZE
-    # scene valide, così un crash non perde tutto il lavoro già fatto.
+    # --- Download parallelo con sliding-window per evitare OOM ---
+    # Non sottomettiamo tutti gli N items contemporaneamente (OOM).
+    # Teniamo al massimo PARALLEL_WINDOW future in volo; appena uno completa
+    # ne sottomettiamo un altro dall'iteratore, così la memoria è bounded.
 
     def _proc_ls(item):
         import planetary_computer as _pc
@@ -541,11 +549,11 @@ def get_vegetation_indices(
     n_ls = len(items_ls)
     done = 0
 
-    for item in items_ls:
-        res = _proc_ls(item)
+    def _handle_ls_result(res):
+        nonlocal done
         done += 1
         if res is None:
-            continue
+            return
         dt_obj, scene_vals, n_clear, indices = res
         date_str = dt_obj.date().isoformat()
         row = {"date": date_str, "year": dt_obj.year,
@@ -571,6 +579,24 @@ def get_vegetation_indices(
             if verbose:
                 print(f"  Landsat checkpoint: {done}/{n_ls} scanned, "
                       f"{len(new_ls_scenes)} valid, cache saved", flush=True)
+
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as _pool:
+        _iter = iter(items_ls)
+        _pending = set()
+        # Riempi la finestra iniziale
+        for _item in itertools.islice(_iter, PARALLEL_WINDOW):
+            _pending.add(_pool.submit(_proc_ls, _item))
+        while _pending:
+            _done_set, _pending = wait(_pending, return_when=FIRST_COMPLETED)
+            # Rifornisci la finestra
+            for _ in _done_set:
+                try:
+                    _pending.add(_pool.submit(_proc_ls, next(_iter)))
+                except StopIteration:
+                    pass
+            # Processa i risultati completati
+            for _f in _done_set:
+                _handle_ls_result(_f.result())
 
     # Merge con cache esistente e salva
     ls_timeseries = ls_timeseries + new_ls_scenes
@@ -662,13 +688,13 @@ def get_vegetation_indices(
             return None
         return dt_obj, lai_mean, lai_std, lai_map
 
-    for item in items_mod:
-        res = _proc_mod(item)
+    def _handle_mod_result(res):
+        nonlocal done_mod
         done_mod += 1
         if verbose and done_mod % 100 == 0:
             print(f"  MODIS: {done_mod}/{n_mod} processed", flush=True)
         if res is None:
-            continue
+            return
         dt_obj, lai_mean, lai_std, lai_map = res
         date_str = dt_obj.date().isoformat()
         new_mod_scenes.append({
@@ -693,6 +719,21 @@ def get_vegetation_indices(
             if verbose:
                 print(f"  MODIS checkpoint: {done_mod}/{n_mod} scanned, "
                       f"{len(new_mod_scenes)} valid, cache saved", flush=True)
+
+    with ThreadPoolExecutor(max_workers=N_WORKERS) as _pool:
+        _iter = iter(items_mod)
+        _pending = set()
+        for _item in itertools.islice(_iter, PARALLEL_WINDOW):
+            _pending.add(_pool.submit(_proc_mod, _item))
+        while _pending:
+            _done_set, _pending = wait(_pending, return_when=FIRST_COMPLETED)
+            for _ in _done_set:
+                try:
+                    _pending.add(_pool.submit(_proc_mod, next(_iter)))
+                except StopIteration:
+                    pass
+            for _f in _done_set:
+                _handle_mod_result(_f.result())
 
     mod_timeseries = mod_timeseries + new_mod_scenes
     mod_timeseries.sort(key=lambda x: x["date"])
