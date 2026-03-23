@@ -101,6 +101,8 @@ from sampling_plan import (compute_sampling_plan, report_sampling_plan,
                             plot_sampling_plan)
 from era5sm import (get_era5_soil_moisture, report_era5_sm, plot_era5_sm)
 from smphysics import (fuse_soil_moisture, report_sm_fusion, plot_sm_fusion)
+from config_parser import load_config, get as cfg_get
+from radiofreq import run_rf_analysis
 
 try:
     import rasterio
@@ -504,6 +506,23 @@ def compute_neutron_fov(elev, dx_grid, dy_grid, sx, sy, s_elev, r86, z86_cm,
 def main():
     t0 = time.perf_counter()
 
+    # ------------------------------------------------------------------ #
+    # Legge config.cfg (opzionale — il programma funziona anche senza)   #
+    # ------------------------------------------------------------------ #
+    _cfg_path = os.path.join(_SCRIPT_DIR, "config.cfg")
+    _cfg = {}
+    if os.path.exists(_cfg_path):
+        try:
+            _cfg = load_config(_cfg_path)
+            print(f"[config] Loaded: {_cfg_path}")
+        except Exception as _e:
+            print(f"[config] WARNING: cannot parse {_cfg_path}: {_e}")
+    else:
+        print(f"[config] No config.cfg found — RF analysis will be skipped "
+              f"(create {_cfg_path} with OPENCELLID_TOKEN to enable)")
+
+    OPENCELLID_TOKEN = cfg_get(_cfg, "OPENCELLID_TOKEN", default="")
+
     print("=" * 62)
     print("CRNS TOPOGRAPHIC CORRECTION TOOL")
     print("=" * 62)
@@ -744,6 +763,33 @@ def main():
     )
     print(report_sm_fusion(sm_fused))
 
+    # 20 — RF analysis (celle + RFI da OSM)
+    rf_result = None
+    print("\n[20] RF analysis (OpenCelliD + OSM RFI) ...")
+    if OPENCELLID_TOKEN:
+        try:
+            rf_result = run_rf_analysis(
+                lat         = LAT,
+                lon         = LON,
+                site_elev_m = s_elev,
+                token       = OPENCELLID_TOKEN,
+                cache_dir   = _OUT,
+                verbose     = True,
+            )
+            conn = rf_result["connectivity"]
+            rfi  = rf_result["rfi"]
+            print(f"   Connectivity: {conn['n_cells_total']} celle analizzate")
+            for tech, info in conn.get("by_radio", {}).items():
+                print(f"     {tech:<5}  best={info['best_rx_dbm']:+.0f} dBm  "
+                      f"quality={info['quality']}")
+            print(f"   RFI index: {rfi['rfi_index']:.1f}/10  "
+                  f"level={rfi['rfi_level']}  "
+                  f"n_sources={rfi['n_sources']}")
+        except Exception as _rf_e:
+            print(f"   [WARN] RF analysis failed: {_rf_e}")
+    else:
+        print("   Skipped (OPENCELLID_TOKEN not set in config.cfg)")
+
     sampling = compute_sampling_plan(
         r86,
         theta_v_init = THETA_V_INIT,
@@ -781,6 +827,7 @@ def main():
         era5_sm=era5_sm,
         sm_fused=sm_fused,
         sampling=sampling,
+        rf=rf_result,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(

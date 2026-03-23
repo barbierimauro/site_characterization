@@ -770,9 +770,6 @@ def run_rf_analysis(lat, lon, site_elev_m,
     -------
     dict con 'connectivity', 'rfi', 'dem_shape', metadata
     """
-    # Import lazy per evitare dipendenze al top-level
-    from rf_core import (load_dem_glo90, load_cells, load_osm_rfi)
-
     if verbose:
         print("[RF] Loading DEM GLO-90 ...", flush=True)
     elev, lats_1d, lons_1d = load_dem_glo90(

@@ -65,8 +65,8 @@ FCOVER_NDVI_VEG  = 0.95
 MODIS_LAI_SCALE  = 0.1
 MODIS_LAI_NODATA = 255
 
-LANDSAT_START_YEAR = 2013
-MODIS_START_YEAR   = 2013
+LANDSAT_START_YEAR = 2020
+MODIS_START_YEAR   = 2020
 
 PC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
@@ -504,6 +504,8 @@ def get_vegetation_indices(
                         it.properties.get("start_datetime","")) > ls_last_date]
 
     if verbose:
+        print(f"  Landsat search range : {ls_search_start} → {date_end}",
+              flush=True)
         print(f"  {len(items_ls)} new Landsat scenes to download",
               flush=True)
 
@@ -631,6 +633,8 @@ def get_vegetation_indices(
                         > mod_last_date]
 
     if verbose:
+        print(f"  MODIS search range   : {mod_search_start} → {date_end}",
+              flush=True)
         print(f"  {len(items_mod)} new MODIS scenes to download", flush=True)
 
     new_mod_scenes = []
@@ -923,6 +927,8 @@ def get_snow_cover(
                          > snow_last_date]
 
     if verbose:
+        print(f"  Snow search range    : {search_start} → {date_end}",
+              flush=True)
         print(f"  {len(items_snow)} new snow scenes to download", flush=True)
 
     # ------------------------------------------------------------------ #
