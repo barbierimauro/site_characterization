@@ -198,7 +198,7 @@ def _layer_weights(rho_b_gcm3, lambda_s_gcm2=LAMBDA_S_GCM2):
     -------
     weights : array (6,), normalizzati a somma 1
     """
-    lam = lambda_s_gcm2 / rho_b_gcm3   # [cm]
+    lam = lambda_s_gcm2 / max(rho_b_gcm3, 0.01)   # [cm] — guard against zero/negative bdod
     w   = (np.exp(-DEPTH_TOPS / lam)
            - np.exp(-DEPTH_BOTS / lam))
     w   = np.maximum(w, 0.0)
@@ -540,6 +540,8 @@ def get_soil_properties(
     bdod_top3 = profiles['bdod']['mean'][:3]   # 0-5, 5-15, 15-30 cm
     valid      = bdod_top3[~np.isnan(bdod_top3)]
     rho_b_for_weights = float(np.mean(valid)) if len(valid) > 0 else 1.4
+    if rho_b_for_weights <= 0:
+        rho_b_for_weights = 1.4   # WCS restituisce 0 per zone senza dati
 
     weights = _layer_weights(rho_b_for_weights)
 
