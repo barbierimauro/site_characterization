@@ -48,14 +48,10 @@ LAT = 45.338058
 
 #================
 
-NAME = "pradazzo"
-#Cima Pradazzo
-LON = 11.822478        # decimal degrees, WGS84
-LAT = 46.355945          # decimal degrees, WGS84
-
-NAME = "ELHAMAN"
-LON = 30.727636
-LAT = 29.234043
+NAME = "RAVALLES"
+# RA VALLES
+LON             = 12.077010   # decimal degrees WGS84
+LAT             = 46.548503   # decimal degrees WGS84
 
 SENSOR_HEIGHT_M = 2.0         # sensor height above ground (m)
 RHO_BULK        = 1.4         # soil bulk density (g/cm3)
