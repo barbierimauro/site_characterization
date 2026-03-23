@@ -173,7 +173,7 @@ def _parse_macrostrat_unit(unit):
     dict semplificato
     """
     # Litologia: lista di dict con tipo, classe, colore
-    liths = unit.get("liths", []) or []
+    liths = [l for l in (unit.get("liths", []) or []) if isinstance(l, dict)]
     lith_names = [l.get("lith", "unknown") for l in liths if l.get("lith")]
     lith_types  = [l.get("lith_type", "") for l in liths if l.get("lith_type")]
     lith_classes = [l.get("lith_class", "") for l in liths if l.get("lith_class")]
