@@ -78,6 +78,7 @@ import matplotlib.colors as mcolors
 from matplotlib.gridspec import GridSpec
 import requests, os, json, hashlib, time, math
 import multiprocessing as mp
+import gc
 from kappa_topo_3d import compute_kappa_topo_3d, report_kappa_3d
 from site_fluxes        import (compute_site_fluxes, report_site_fluxes,
                                 compute_desilets_curve, report_desilets_curve)
@@ -859,45 +860,69 @@ def main():
 
     # 22 — Plots
     print("[22] Generating plots ...")
-    plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
-              results, _outpath("crns_topo_main.png"),
-              lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
-    plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86,
-                   kappa_topo, wmap, az_neutron, overlap_az, deficit_az,
-                   _outpath("crns_footprint.png"))
-    plot_horizon(azimuths, horizon, kappa_muon, per_az_muon,
-                 _outpath("crns_horizon.png"))
-    plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
-                    az_neutron, overlap_az, r86, z86, kappa_topo,
-                    _outpath("crns_fov_detail.png"),
-                    lat=LAT, lon=LON, sensor_alt=s_elev)
-    plot_climate(site_climate, thermal,
-                 _outpath("crns_climate.png"),
-                 lat=LAT, lon=LON, sensor_alt=s_elev)
-    plot_soil(soil, _outpath("crns_soil.png"), lat=LAT, lon=LON)
-    plot_thermal(site_climate, thermal,
-                 _outpath("crns_thermal.png"),
-                 lat=LAT, lon=LON, sensor_alt=s_elev)
-    plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86,
-             _outpath("crns_twi.png"), lat=LAT, lon=LON)
-    plot_kappa_budget(results, _outpath("crns_kappa_budget.png"),
-                      lat=LAT, lon=LON)
-    plot_water(water, dx_grid, dy_grid, dist_grid, r86,
-               _outpath("crns_water.png"), lat=LAT, lon=LON)
-    plot_seasonal_cycles(veg, _outpath("crns_veg_seasonal.png"),
-                         site_name=NAME)
-    plot_timeseries(veg, _outpath("crns_veg_timeseries.png"),
-                    site_name=NAME)
-    plot_maps(veg, dx_grid, dy_grid, dist_grid, r86,
-              _outpath("crns_veg_maps.png"), site_name=NAME)
-    plot_lulc_worldcover(lulc_res, dx_grid, dy_grid, dist_grid,
-                         _outpath("crns_lulc_worldcover.png"), site_name=NAME)
-    plot_lulc_osm(lulc_res, _outpath("crns_lulc_osm.png"),
-                  site_name=NAME, map_radius_m=int(r86 * 1.5))
-    plot_sampling_plan(sampling, elev, dx_grid, dy_grid, dist_grid,
-                       _outpath("crns_sampling_plan.png"), site_name=NAME)
-    plot_era5_sm(era5_sm,  _outpath("crns_era5_sm.png"),  site_name=NAME)
-    plot_sm_fusion(sm_fused, _outpath("crns_sm_fusion.png"), site_name=NAME)
+
+    def _plot(fn, func, *args, **kwargs):
+        func(*args, **kwargs)
+        gc.collect()
+        print(f"  Saved: {fn}", flush=True)
+
+    _plot(_outpath("crns_topo_main.png"),
+          plot_main, elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
+          results, _outpath("crns_topo_main.png"),
+          lat=LAT, lon=LON, dem_radius_m=DEM_RADIUS_M)
+    _plot(_outpath("crns_footprint.png"),
+          plot_footprint, elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86,
+          kappa_topo, wmap, az_neutron, overlap_az, deficit_az,
+          _outpath("crns_footprint.png"))
+    _plot(_outpath("crns_horizon.png"),
+          plot_horizon, azimuths, horizon, kappa_muon, per_az_muon,
+          _outpath("crns_horizon.png"))
+    _plot(_outpath("crns_fov_detail.png"),
+          plot_fov_detail, azimuths, horizon, per_az_muon, kappa_muon,
+          az_neutron, overlap_az, r86, z86, kappa_topo,
+          _outpath("crns_fov_detail.png"),
+          lat=LAT, lon=LON, sensor_alt=s_elev)
+    _plot(_outpath("crns_climate.png"),
+          plot_climate, site_climate, thermal,
+          _outpath("crns_climate.png"),
+          lat=LAT, lon=LON, sensor_alt=s_elev)
+    _plot(_outpath("crns_soil.png"),
+          plot_soil, soil, _outpath("crns_soil.png"), lat=LAT, lon=LON)
+    _plot(_outpath("crns_thermal.png"),
+          plot_thermal, site_climate, thermal,
+          _outpath("crns_thermal.png"),
+          lat=LAT, lon=LON, sensor_alt=s_elev)
+    _plot(_outpath("crns_twi.png"),
+          plot_twi, twi, elev, dx_grid, dy_grid, dist_grid, r86,
+          _outpath("crns_twi.png"), lat=LAT, lon=LON)
+    _plot(_outpath("crns_kappa_budget.png"),
+          plot_kappa_budget, results, _outpath("crns_kappa_budget.png"),
+          lat=LAT, lon=LON)
+    _plot(_outpath("crns_water.png"),
+          plot_water, water, dx_grid, dy_grid, dist_grid, r86,
+          _outpath("crns_water.png"), lat=LAT, lon=LON)
+    _plot(_outpath("crns_veg_seasonal.png"),
+          plot_seasonal_cycles, veg, _outpath("crns_veg_seasonal.png"),
+          site_name=NAME)
+    _plot(_outpath("crns_veg_timeseries.png"),
+          plot_timeseries, veg, _outpath("crns_veg_timeseries.png"),
+          site_name=NAME)
+    _plot(_outpath("crns_veg_maps.png"),
+          plot_maps, veg, dx_grid, dy_grid, dist_grid, r86,
+          _outpath("crns_veg_maps.png"), site_name=NAME)
+    _plot(_outpath("crns_lulc_worldcover.png"),
+          plot_lulc_worldcover, lulc_res, dx_grid, dy_grid, dist_grid,
+          _outpath("crns_lulc_worldcover.png"), site_name=NAME)
+    _plot(_outpath("crns_lulc_osm.png"),
+          plot_lulc_osm, lulc_res, _outpath("crns_lulc_osm.png"),
+          site_name=NAME, map_radius_m=int(r86 * 1.5))
+    _plot(_outpath("crns_sampling_plan.png"),
+          plot_sampling_plan, sampling, elev, dx_grid, dy_grid, dist_grid,
+          _outpath("crns_sampling_plan.png"), site_name=NAME)
+    _plot(_outpath("crns_era5_sm.png"),
+          plot_era5_sm, era5_sm, _outpath("crns_era5_sm.png"), site_name=NAME)
+    _plot(_outpath("crns_sm_fusion.png"),
+          plot_sm_fusion, sm_fused, _outpath("crns_sm_fusion.png"), site_name=NAME)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")
