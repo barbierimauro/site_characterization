@@ -121,7 +121,7 @@ def compute_sampling_plan(r86, theta_v_init=0.20, theta_wp=0.05,
     ring_weights = np.zeros(n_rings)
     for i in range(n_rings):
         r_test = np.linspace(ring_inner[i] + 1, ring_outer[i], 30)
-        ring_weights[i] = np.trapz(_W(r_test, r86) * r_test, r_test)
+        ring_weights[i] = np.trapezoid(_W(r_test, r86) * r_test, r_test)
     ring_weights /= ring_weights.sum()  # normalizza
 
     for i in range(n_rings):
