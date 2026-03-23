@@ -97,6 +97,8 @@ from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
                    plot_kappa_budget, plot_water)
 from vegetation_plots    import plot_seasonal_cycles, plot_timeseries, plot_maps
 from lulc import get_lulc, report_lulc, plot_lulc_worldcover, plot_lulc_osm
+from evapotranspiration    import compute_et, report_et, plot_et
+from electrical_conductivity import compute_ec, report_ec, plot_ec
 from reports import write_report
 from crns_corrections import get_crns_corrections, report_crns_corrections
 from geology import get_geology, report_geology
@@ -785,7 +787,17 @@ def main():
     )
     print(report_sm_fusion(sm_fused))
 
-    # 20 — RF analysis (celle + RFI da OSM)
+    # 20 — Evapotranspiration (FAO-56 Penman-Monteith)
+    print("\n[20] Computing evapotranspiration (FAO-56 PM) ...")
+    et_result = compute_et(site_climate, LAT, s_elev, crns_corr=crns_corr)
+    print(report_et(et_result))
+
+    # 20b — Electrical Conductivity (ECa footprint)
+    print("\n[20b] Computing electrical conductivity (ECa) ...")
+    ec_result = compute_ec(soil, era5_sm, site_climate)
+    print(report_ec(ec_result))
+
+    # 20c — RF analysis (celle + RFI da OSM)
     rf_result = None
     print("\n[20] RF analysis (OpenCelliD + OSM RFI) ...")
     if OPENCELLID_TOKEN:
@@ -850,6 +862,8 @@ def main():
         sm_fused=sm_fused,
         sampling=sampling,
         rf=rf_result,
+        et=et_result,
+        ec=ec_result,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -930,6 +944,11 @@ def main():
           plot_era5_sm, era5_sm, _outpath("crns_era5_sm.png"), site_name=NAME)
     _plot(_outpath("crns_sm_fusion.png"),
           plot_sm_fusion, sm_fused, _outpath("crns_sm_fusion.png"), site_name=NAME)
+    _plot(_outpath("crns_et.png"),
+          plot_et, et_result, site_climate,
+          _outpath("crns_et.png"), site_name=NAME)
+    _plot(_outpath("crns_ec.png"),
+          plot_ec, ec_result, _outpath("crns_ec.png"), site_name=NAME)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")

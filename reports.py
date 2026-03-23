@@ -14,6 +14,8 @@ from crns_corrections   import report_crns_corrections
 from geology            import report_geology
 from sampling_plan      import report_sampling_plan
 from radiofreq          import report_rf
+from evapotranspiration import report_et
+from electrical_conductivity import report_ec
 
 
 def write_report(path, params, results):
@@ -161,6 +163,14 @@ def write_report(path, params, results):
         s(report_crns_corrections(results['crns_corrections'], z86_cm=z86))
     else:
         s("  [non disponibile]")
+    s()
+
+    h("EVAPOTRANSPIRATION (FAO-56 Penman-Monteith)")
+    s(report_et(results.get("et")))
+    s()
+
+    h("CONDUCIBILITA' ELETTRICA APPARENTE (ECa)")
+    s(report_ec(results.get("ec")))
     s()
 
     h("RF ANALYSIS (OpenCelliD + OSM RFI)")
