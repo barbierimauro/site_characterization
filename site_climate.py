@@ -31,6 +31,7 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import requests
+from net_utils import http_get
 import hashlib, json, os
 from datetime import datetime, date
 
@@ -301,8 +302,7 @@ def _get_precipitation_openmeteo(lat, lon, startyear=2005, endyear=2020,
         "end_date"         : f"{endyear}-12-31",
         "daily"            : "precipitation_sum",
     }
-    resp = requests.get(url, params=params, timeout=60)
-    resp.raise_for_status()
+    resp = http_get(url, params=params, timeout=60)
     data = resp.json()
 
     era5_elevation_m = float(data.get('elevation', float('nan')))

@@ -18,6 +18,10 @@ Affiliation :
 Email       : mauro.barbieri@pm.me
 """
 
+import os
+import gzip
+import hashlib
+import pickle
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
@@ -42,6 +46,44 @@ FRI_WEIGHTS = dict(hand=0.45, flow_acc=0.25, jrc=0.20, precip=0.10)
 FLOOD_THRESHOLDS = [2.0, 5.0, 10.0, 20.0]   # HAND [m] boundaries
 FLOOD_LABELS     = ["Very High", "High", "Moderate", "Low", "Very Low"]
 FLOOD_COLORS     = ["#023858", "#0570b0", "#74a9cf", "#bdc9e1", "#f1eef6"]
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers — compute_flood
+# ---------------------------------------------------------------------------
+
+def _flood_hash(site_lat, site_lon, r_inner_km):
+    tag = f"{site_lat:.5f}_{site_lon:.5f}_{r_inner_km:.3f}"
+    return hashlib.sha256(tag.encode()).hexdigest()[:16]
+
+
+def _flood_cache_path(cache_dir, site_lat, site_lon, r_inner_km):
+    return os.path.join(cache_dir,
+                        f"flood_{_flood_hash(site_lat, site_lon, r_inner_km)}.pkl.gz")
+
+
+def load_flood_cache(cache_dir, site_lat, site_lon, r_inner_km):
+    """Ritorna il dict risultato o None se non in cache."""
+    if cache_dir is None:
+        return None
+    p = _flood_cache_path(cache_dir, site_lat, site_lon, r_inner_km)
+    if not os.path.exists(p):
+        return None
+    try:
+        with gzip.open(p, "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        return None
+
+
+def save_flood_cache(cache_dir, site_lat, site_lon, r_inner_km, result):
+    """Salva il dict risultato in cache."""
+    if cache_dir is None:
+        return
+    os.makedirs(cache_dir, exist_ok=True)
+    p = _flood_cache_path(cache_dir, site_lat, site_lon, r_inner_km)
+    with gzip.open(p, "wb") as f:
+        pickle.dump(result, f, protocol=4)
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +495,8 @@ def compute_flood(elev_30, lats_30, lons_30,
                    jrc_res, era5_res, osm_elements,
                    site_lat, site_lon,
                    r_inner_km=2.0,
-                   verbose=True):
+                   verbose=True,
+                   cache_dir=None):
     """
     Analisi suscettibilità alluvionale completa.
 
@@ -467,6 +510,7 @@ def compute_flood(elev_30, lats_30, lons_30,
     site_lat, site_lon : coordinate sensore
     r_inner_km      : raggio zona GLO-30 [km]
     verbose         : stampa progressi
+    cache_dir       : directory cache (None = no cache)
 
     Returns
     -------
@@ -476,6 +520,12 @@ def compute_flood(elev_30, lats_30, lons_30,
               hand_at_sensor, fri_at_sensor, susc_at_sensor,
               high_risk_zones, osm_waterways
     """
+    cached = load_flood_cache(cache_dir, site_lat, site_lon, r_inner_km)
+    if cached is not None:
+        if verbose:
+            print("[Flood] Loaded from cache.", flush=True)
+        return cached
+
     if verbose:
         print("[Flood] Building DEM mosaic ...", flush=True)
     elev_m, lats_m, lons_m, inner = build_mosaic(
@@ -565,7 +615,7 @@ def compute_flood(elev_30, lats_30, lons_30,
         print(f"[Flood] Done.  HAND_sensor={hand_s:.1f}m  "
               f"susc={FLOOD_LABELS[5-susc_s]}", flush=True)
 
-    return dict(
+    result = dict(
         elev_m          = elev_m,
         lats_m          = lats_m,
         lons_m          = lons_m,
@@ -592,6 +642,10 @@ def compute_flood(elev_30, lats_30, lons_30,
         r_inner_km      = r_inner_km,
         px_area_m2      = px_a,
     )
+    save_flood_cache(cache_dir, site_lat, site_lon, r_inner_km, result)
+    if verbose and cache_dir is not None:
+        print("[Flood] Result saved to cache.", flush=True)
+    return result
 
 
 def _extract_osm_waterways(elements, site_lat, site_lon,

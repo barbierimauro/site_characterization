@@ -105,7 +105,7 @@ def _download_year(lat, lon, year):
     Scarica dati orari ERA5-Land per un anno.
     Ritorna dict {var: float32 array} + timestamps int64.
     """
-    import requests
+    from net_utils import http_get
     import pandas as pd
 
     now        = datetime.now(timezone.utc)
@@ -123,9 +123,8 @@ def _download_year(lat, lon, year):
     }
 
     t0   = time.perf_counter()
-    resp = requests.get(OPEN_METEO_HISTORY_URL,
-                        params=params, timeout=120)
-    resp.raise_for_status()
+    resp = http_get(OPEN_METEO_HISTORY_URL,
+                    params=params, timeout=120)
     dt_req = time.perf_counter() - t0
 
     hourly     = resp.json().get("hourly", {})

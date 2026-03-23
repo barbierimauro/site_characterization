@@ -292,10 +292,17 @@ def load_cells(lat, lon, radius_m, token, cache_dir, verbose=True):
     if verbose:
         print("   Cells: querying OpenCelliD ...", flush=True)
 
-    resp = requests.get(OPENCELLID_URL, params=params, timeout=30)
-    if resp.status_code == 403:
-        raise ValueError("Token OpenCelliD non valido (HTTP 403)")
-    resp.raise_for_status()
+    from net_utils import http_get as _http_get
+    try:
+        resp = _http_get(OPENCELLID_URL, params=params, timeout=30,
+                         verbose=verbose)
+    except Exception as exc:
+        import requests as _req
+        if (isinstance(exc, _req.exceptions.HTTPError) and
+                exc.response is not None and
+                exc.response.status_code == 403):
+            raise ValueError("Token OpenCelliD non valido (HTTP 403)") from exc
+        raise
 
     cells = resp.json().get("cells", [])
     if verbose:
@@ -328,7 +335,7 @@ def load_osm_rfi(lat, lon, radius_m, cache_dir, verbose=True):
     linee elettriche, ferrovie, torri radio, edifici industriali.
     Cache: rf_osm_rfi_{hash}.json.gz
     """
-    import requests
+    from net_utils import http_post as _http_post
 
     os.makedirs(cache_dir, exist_ok=True)
     gz = os.path.join(cache_dir,
@@ -366,10 +373,15 @@ out geom;
     if verbose:
         print("   OSM RFI: querying Overpass ...", flush=True)
 
-    resp = requests.post(OVERPASS_URL,
-                         data={"data": query}, timeout=60)
-    resp.raise_for_status()
-    elements = resp.json().get("elements", [])
+    try:
+        resp = _http_post(OVERPASS_URL,
+                          data={"data": query}, timeout=60,
+                          verbose=verbose)
+        elements = resp.json().get("elements", [])
+    except Exception as exc:
+        print(f"   OSM RFI: Overpass non raggiungibile "
+              f"({exc.__class__.__name__}) — elementi vuoti.", flush=True)
+        elements = []
 
     if verbose:
         tags = {}

@@ -29,6 +29,7 @@ Email       : mauro.barbieri@pm.me
 
 import numpy as np
 import requests
+from net_utils import http_get
 import hashlib
 import json
 import os
@@ -132,8 +133,7 @@ def _fetch_openmeteo_era5(lat, lon, start_year=2019, end_year=2023,
                        "snowfall_sum,snow_depth_mean"),
         "timezone"  : "UTC",
     }
-    resp = requests.get(url, params=params, timeout=timeout_s)
-    resp.raise_for_status()
+    resp = http_get(url, params=params, timeout=timeout_s)
     d = resp.json()["daily"]
 
     dates = d["time"]

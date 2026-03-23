@@ -355,8 +355,9 @@ def download_osm(lat, lon, radius_m=600, verbose=True):
     """
     Scarica elementi OSM entro radius_m via Overpass API.
     Usa 'out geom' per includere le coordinate di ogni nodo.
+    In caso di errore di rete ritorna [] senza crashare.
     """
-    import requests
+    from net_utils import http_post
 
     c          = np.cos(np.radians(lat))
     margin_lat = radius_m / 111320.0 * 1.1
@@ -381,10 +382,16 @@ out geom;
     if verbose:
         print("   OSM: querying Overpass ...", flush=True)
 
-    resp = requests.post(OVERPASS_URL,
-                         data={"data": query}, timeout=60)
-    resp.raise_for_status()
-    elements = resp.json().get("elements", [])
+    try:
+        resp = http_post(OVERPASS_URL,
+                         data={"data": query}, timeout=60,
+                         verbose=verbose)
+        elements = resp.json().get("elements", [])
+    except Exception as exc:
+        print(f"   OSM: Overpass non raggiungibile "
+              f"({exc.__class__.__name__}) — elementi vuoti.",
+              flush=True)
+        return []
 
     if verbose:
         print(f"   OSM: {len(elements)} elements", flush=True)

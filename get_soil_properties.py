@@ -357,9 +357,9 @@ def _fetch_soilgrids_wcs(lat, lon, timeout_s=60):
             ("SUBSET",        f"long({lon0:.6f},{lon1:.6f})"),
             ("SUBSET",        f"lat({lat0:.6f},{lat1:.6f})"),
         ]
-        resp = requests.get("https://maps.isric.org/mapserv",
-                            params=params, timeout=timeout_s)
-        resp.raise_for_status()
+        from net_utils import http_get as _http_get
+        resp = _http_get("https://maps.isric.org/mapserv",
+                         params=params, timeout=timeout_s)
         return _parse_soilgrids_tiff(resp.content)
 
     raw = {}
@@ -497,14 +497,13 @@ def get_soil_properties(
 
     wrb_class = 'N/A'
     try:
-        resp = requests.get(SOILGRIDS_URL, params=params, timeout=timeout_s)
-        resp.raise_for_status()
+        from net_utils import http_get as _http_get
+        resp = _http_get(SOILGRIDS_URL, params=params, timeout=timeout_s)
         data = resp.json()
         layers_json   = data['properties']['layers']
         layer_by_name = {lay['name']: lay for lay in layers_json}
         wrb_class     = data.get('wrb_class_name', 'N/A')
-    except (requests.exceptions.ConnectionError,
-            requests.exceptions.Timeout) as exc:
+    except Exception as exc:
         print(f"   REST non raggiungibile ({exc.__class__.__name__}),"
               " fallback WCS maps.isric.org ...", flush=True)
         layer_by_name = _fetch_soilgrids_wcs(lat, lon, timeout_s)

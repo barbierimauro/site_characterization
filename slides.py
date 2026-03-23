@@ -25,10 +25,49 @@ Affiliation :
 Email       : mauro.barbieri@pm.me
 """
 
-import os, json, gzip, hashlib
+import os, json, gzip, hashlib, pickle
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers — compute_landslide
+# ---------------------------------------------------------------------------
+
+def _slide_hash(site_lat, site_lon, z_m, dz_m, month):
+    tag = f"{site_lat:.5f}_{site_lon:.5f}_{z_m:.2f}_{dz_m:.2f}_{month}"
+    return hashlib.sha256(tag.encode()).hexdigest()[:16]
+
+
+def _slide_cache_path(cache_dir, site_lat, site_lon, z_m, dz_m, month):
+    return os.path.join(cache_dir,
+                        f"slide_{_slide_hash(site_lat, site_lon, z_m, dz_m, month)}.pkl.gz")
+
+
+def load_slide_cache(cache_dir, site_lat, site_lon, z_m, dz_m, month):
+    """Ritorna il dict risultato o None se non in cache."""
+    if cache_dir is None:
+        return None
+    p = _slide_cache_path(cache_dir, site_lat, site_lon, z_m, dz_m, month)
+    if not os.path.exists(p):
+        return None
+    try:
+        with gzip.open(p, "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        return None
+
+
+def save_slide_cache(cache_dir, site_lat, site_lon, z_m, dz_m, month, result):
+    """Salva il dict risultato in cache."""
+    if cache_dir is None:
+        return
+    os.makedirs(cache_dir, exist_ok=True)
+    p = _slide_cache_path(cache_dir, site_lat, site_lon, z_m, dz_m, month)
+    with gzip.open(p, "wb") as f:
+        pickle.dump(result, f, protocol=4)
+
 
 # ---------------------------------------------------------------------------
 # Lookup geotecnico per litologia Macrostrat
@@ -297,7 +336,8 @@ def compute_landslide(elev, lats_1d, lons_1d,
                        site_lat, site_lon,
                        z_m=1.5, dz_m=0.5,
                        month=None,
-                       verbose=True):
+                       verbose=True,
+                       cache_dir=None):
     """
     Calcola mappa suscettibilità frane su tutto il DEM.
 
@@ -312,6 +352,7 @@ def compute_landslide(elev, lats_1d, lons_1d,
     z_m, dz_m       : profondità e incertezza strato scivolante [m]
     month           : 1-12 per SM mensile, None per media annua
     verbose         : stampa progressi
+    cache_dir       : directory cache (None = no cache)
 
     Returns
     -------
@@ -330,6 +371,12 @@ def compute_landslide(elev, lats_1d, lons_1d,
       site_lat, site_lon
       month, z_m
     """
+    cached = load_slide_cache(cache_dir, site_lat, site_lon, z_m, dz_m, month)
+    if cached is not None:
+        if verbose:
+            print("   Landslide: loaded from cache.", flush=True)
+        return cached
+
     if verbose:
         print("   Landslide: computing slope ...", flush=True)
     slope, curv = compute_slope(elev, lats_1d, lons_1d)
@@ -404,7 +451,7 @@ def compute_landslide(elev, lats_1d, lons_1d,
               f"very_high={vh} pixels  "
               f"FS_sensor={fs_at_sensor[0]:.2f}", flush=True)
 
-    return dict(
+    result = dict(
         fs_mean         = fs_mean,
         fs_low          = fs_low,
         fs_high         = fs_high,
@@ -423,6 +470,10 @@ def compute_landslide(elev, lats_1d, lons_1d,
         month           = month,
         z_m             = z_m,
     )
+    save_slide_cache(cache_dir, site_lat, site_lon, z_m, dz_m, month, result)
+    if verbose and cache_dir is not None:
+        print("   Landslide: result saved to cache.", flush=True)
+    return result
 
 
 # ---------------------------------------------------------------------------

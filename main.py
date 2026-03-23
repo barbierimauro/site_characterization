@@ -713,15 +713,19 @@ def main():
 
     # 14 — LULC (Land Use / Land Cover)
     print("\n[14] Computing LULC kappa (WorldCover + OSM) ...")
-    lulc_res = get_lulc(
-        LAT, LON,
-        dx_grid, dy_grid, dist_grid,
-        r86,
-        cache_dir=_OUT,
-        osm_radius_m=int(r86 * 1.5),
-        theta_v_init=THETA_V_INIT,
-        verbose=True)
-    print(report_lulc(lulc_res))
+    try:
+        lulc_res = get_lulc(
+            LAT, LON,
+            dx_grid, dy_grid, dist_grid,
+            r86,
+            cache_dir=_OUT,
+            osm_radius_m=int(r86 * 1.5),
+            theta_v_init=THETA_V_INIT,
+            verbose=True)
+        print(report_lulc(lulc_res))
+    except Exception as _lulc_e:
+        print(f"   [WARN] LULC computation failed: {_lulc_e}")
+        lulc_res = None
 
     # 15 — Neutron FOV per-azimuth
     print("\n[15] Computing neutron per-azimuth r_eff ...")
@@ -812,6 +816,7 @@ def main():
             site_lat         = LAT,
             site_lon         = LON,
             verbose          = True,
+            cache_dir        = _OUT,
         )
         print(report_landslide(landslide_result))
     except Exception as _ls_e:
@@ -838,6 +843,7 @@ def main():
             site_lon    = LON,
             r_inner_km  = DEM_RADIUS_M / 1000.0,
             verbose     = True,
+            cache_dir   = _OUT,
         )
         print(report_flood(flood_result, site_name=NAME))
     except Exception as _fl_e:
