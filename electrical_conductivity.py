@@ -127,10 +127,10 @@ def compute_ec(soil, era5_sm, site_climate):
         # Variazione mensile
         "ECa_monthly_dSm"  : [round(float(v), 4) for v in ECa_monthly],
         "sm_monthly_m3m3"  : [round(float(v), 4) for v in sm_monthly],
-        "ECa_mean_dSm"     : round(float(np.mean(ECa_monthly)), 4),
-        "ECa_min_dSm"      : round(float(np.min(ECa_monthly)),  4),
-        "ECa_max_dSm"      : round(float(np.max(ECa_monthly)),  4),
-        "ECa_range_dSm"    : round(float(np.max(ECa_monthly) - np.min(ECa_monthly)), 4),
+        "ECa_mean_dSm"     : round(float(np.nanmean(ECa_monthly)), 4),
+        "ECa_min_dSm"      : round(float(np.nanmin(ECa_monthly)),  4),
+        "ECa_max_dSm"      : round(float(np.nanmax(ECa_monthly)),  4),
+        "ECa_range_dSm"    : round(float(np.nanmax(ECa_monthly) - np.nanmin(ECa_monthly)), 4),
         # Curva
         "theta_curve"      : theta_curve.tolist(),
         "ECa_curve"        : ECa_curve.tolist(),

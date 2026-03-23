@@ -54,6 +54,10 @@ DEFAULT_START_YEAR = 2015
 MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
           "Jul","Aug","Sep","Oct","Nov","Dec"]
 
+# Versione formato cache.  Incrementare quando cambia il layout dei .npz.
+# v2 corregge il bug timestamps: pandas>=2.0 datetime64[ns]//10**9 sbagliato.
+_CACHE_FORMAT_VERSION = 2
+
 
 # ---------------------------------------------------------------------------
 # Cache paths
@@ -129,9 +133,13 @@ def _download_year(lat, lon, year):
 
     hourly     = resp.json().get("hourly", {})
     times      = pd.to_datetime(hourly["time"])
-    timestamps = (times.astype(np.int64) // 10**9).values.astype(np.int64)
+    # Pandas >= 2.0 può usare risoluzione "s" (non "ns"): astype(int64)
+    # restituisce già secondi, // 10**9 porta tutto a ~0 (= 1970 = gennaio).
+    # Conversione robusta: forza datetime64[s] poi int64 → secondi epoch.
+    timestamps = np.array(times, dtype="datetime64[s]").astype(np.int64)
 
-    result = {"timestamps": timestamps}
+    result = {"timestamps": timestamps,
+              "_fmt_ver": np.array([_CACHE_FORMAT_VERSION], dtype=np.int32)}
     for var in SM_VARIABLES:
         vals = np.array(hourly.get(var, [np.nan]*len(times)),
                         dtype=np.float32)
@@ -309,16 +317,40 @@ def get_era5_soil_moisture(
     if verbose:
         print(f"   ERA5 SM site dir: {site_dir}", flush=True)
 
+    # --- Invalida cache con formato vecchio (bug timestamp pandas>=2.0) ---
+    now      = datetime.now(timezone.utc)
+    all_years = list(range(start_year, now.year + 1))
+    stale = []
+    for y in all_years:
+        p = _hourly_path(site_dir, y)
+        if not os.path.exists(p):
+            continue
+        try:
+            d = np.load(p, allow_pickle=False)
+            ver = int(d["_fmt_ver"][0]) if "_fmt_ver" in d else 1
+            if ver < _CACHE_FORMAT_VERSION:
+                stale.append(y)
+        except Exception:
+            stale.append(y)
+    if stale:
+        if verbose:
+            print(f"   ERA5 cache format outdated for years {stale} "
+                  f"— re-downloading ...", flush=True)
+        for y in stale:
+            os.remove(_hourly_path(site_dir, y))
+        # Forza anche ricalcolo aggregati
+        mp = _monthly_path(site_dir)
+        if os.path.exists(mp):
+            os.remove(mp)
+
     # --- Download anni mancanti ---
     downloaded = _download_missing_years(
         lat, lon, site_dir, start_year, verbose)
 
-    now          = datetime.now(timezone.utc)
-    all_years    = list(range(start_year, now.year + 1))
     cached_years = sorted(
         y for y in all_years
         if os.path.exists(_hourly_path(site_dir, y)))
-    from_cache   = not downloaded
+    from_cache   = not downloaded and not stale
 
     # --- Aggregati mensili ---
     meta          = _load_meta(site_dir)
