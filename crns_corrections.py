@@ -315,6 +315,7 @@ def report_crns_corrections(res, z86_cm=15.0):
     f_wv        = res.get('f_WV_monthly', np.ones(12))
     sf          = res.get('snowfall_mm_monthly', np.zeros(12))
 
+    snow_months = list(snow_months) if hasattr(snow_months, '__iter__') else []
     snow_names = [MONTHS[m-1] for m in snow_months] if snow_months else ["nessuno"]
 
     L = [
