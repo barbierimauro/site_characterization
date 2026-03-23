@@ -99,6 +99,8 @@ from vegetation_plots    import plot_seasonal_cycles, plot_timeseries, plot_maps
 from lulc import get_lulc, report_lulc, plot_lulc_worldcover, plot_lulc_osm
 from evapotranspiration    import compute_et, report_et, plot_et
 from electrical_conductivity import compute_ec, report_ec, plot_ec
+from slides                import (compute_landslide, report_landslide,
+                                    plot_landslide)
 from reports import write_report
 from crns_corrections import get_crns_corrections, report_crns_corrections
 from geology import get_geology, report_geology
@@ -797,7 +799,28 @@ def main():
     ec_result = compute_ec(soil, era5_sm, site_climate)
     print(report_ec(ec_result))
 
-    # 20c — RF analysis (celle + RFI da OSM)
+    # 20c — Landslide susceptibility
+    print("\n[20c] Computing landslide susceptibility ...")
+    try:
+        lats_1d = lats_grid[:, 0]
+        lons_1d = lons_grid[0, :]
+        landslide_result = compute_landslide(
+            elev             = elev,
+            lats_1d          = lats_1d,
+            lons_1d          = lons_1d,
+            macrostrat_units = geology.get("units", []),
+            sm_res           = era5_sm,
+            soil_res         = soil,
+            site_lat         = LAT,
+            site_lon         = LON,
+            verbose          = True,
+        )
+        print(report_landslide(landslide_result))
+    except Exception as _ls_e:
+        print(f"   [WARN] Landslide computation failed: {_ls_e}")
+        landslide_result = None
+
+    # 20d — RF analysis (celle + RFI da OSM)
     rf_result = None
     print("\n[20] RF analysis (OpenCelliD + OSM RFI) ...")
     if OPENCELLID_TOKEN:
@@ -864,6 +887,7 @@ def main():
         rf=rf_result,
         et=et_result,
         ec=ec_result,
+        landslide=landslide_result,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -949,6 +973,11 @@ def main():
           _outpath("crns_et.png"), site_name=NAME)
     _plot(_outpath("crns_ec.png"),
           plot_ec, ec_result, _outpath("crns_ec.png"), site_name=NAME)
+    if landslide_result is not None:
+        _plot(_outpath("crns_landslide.png"),
+              plot_landslide, landslide_result,
+              _outpath("crns_landslide.png"),
+              site_name=NAME, r86_m=r86)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")

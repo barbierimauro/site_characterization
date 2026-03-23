@@ -16,6 +16,7 @@ from sampling_plan      import report_sampling_plan
 from radiofreq          import report_rf
 from evapotranspiration import report_et
 from electrical_conductivity import report_ec
+from slides             import report_landslide
 
 
 def write_report(path, params, results):
@@ -175,6 +176,13 @@ def write_report(path, params, results):
 
     h("RF ANALYSIS (OpenCelliD + OSM RFI)")
     s(report_rf(results.get("rf")))
+    s()
+
+    h("LANDSLIDE SUSCEPTIBILITY (infinite slope model)")
+    if 'landslide' in results and results['landslide'] is not None:
+        s(report_landslide(results['landslide']))
+    else:
+        s("  [non disponibile]")
     s()
 
     h("OPTIMAL SOIL SAMPLING PLAN")

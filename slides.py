@@ -223,7 +223,7 @@ def compute_fs(slope, geo, sm_monthly_mean, soil_res,
     m_map : 2D array grado saturazione
     """
     # Grado saturazione m = SM / SAT
-    sat   = float(soil_res.get("sat_crns", 0.45))
+    sat   = float(soil_res.get("theta_sat", 0.45))
     if sat < 0.01: sat = 0.45
 
     if month is not None:
@@ -473,7 +473,7 @@ def report_landslide(res):
 # Plot
 # ---------------------------------------------------------------------------
 
-def plot_landslide(res, path, site_name=""):
+def plot_landslide(res, path, site_name="", r86_m=150.0):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -496,8 +496,9 @@ def plot_landslide(res, path, site_name=""):
     cmap = ListedColormap(SUSC_COLORS[::-1])
     norm = BoundaryNorm([0.5,1.5,2.5,3.5,4.5,5.5], 5)
 
-    theta = np.linspace(0, 2*np.pi, 360)
-    r86_km= 0.15   # ~150m tipico
+    theta  = np.linspace(0, 2*np.pi, 360)
+    r86_km = r86_m / 1000.0
+    clip   = r86_km * 1.3   # axis limits [km]
 
     fig, axes = plt.subplots(1, 3, figsize=(20, 7),
                               facecolor="white")
@@ -507,11 +508,13 @@ def plot_landslide(res, path, site_name=""):
     im = ax.pcolormesh(DX, DY, susc, cmap=cmap, norm=norm,
                         shading="auto")
     ax.plot(r86_km*np.sin(theta), r86_km*np.cos(theta),
-            "w--", lw=1.5, label=f"r86")
+            "w--", lw=1.5, label=f"r86={r86_m:.0f}m")
     ax.plot(0, 0, "w^", ms=10, zorder=5)
     patches = [mpatches.Patch(color=SUSC_COLORS[4-i],
                label=SUSC_LABELS[i]) for i in range(5)]
     ax.legend(handles=patches, fontsize=8, loc="upper right")
+    ax.set_xlim(-clip, clip)
+    ax.set_ylim(-clip, clip)
     ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]"); ax.set_ylabel("Northing [km]")
     ax.set_title("Susceptibility classes\n(infinite slope model)",
@@ -530,6 +533,8 @@ def plot_landslide(res, path, site_name=""):
              "k--", lw=1.5)
     ax2.plot(0, 0, "k^", ms=10, zorder=5)
     plt.colorbar(im2, ax=ax2, label="FS")
+    ax2.set_xlim(-clip, clip)
+    ax2.set_ylim(-clip, clip)
     ax2.set_aspect("equal")
     ax2.set_xlabel("Easting [km]")
     ax2.set_title("Safety Factor (FS)\n"
@@ -543,6 +548,8 @@ def plot_landslide(res, path, site_name=""):
              "w--", lw=1.5)
     ax3.plot(0, 0, "w^", ms=10, zorder=5)
     plt.colorbar(im3, ax=ax3, label="Slope [°]")
+    ax3.set_xlim(-clip, clip)
+    ax3.set_ylim(-clip, clip)
     ax3.set_aspect("equal")
     ax3.set_xlabel("Easting [km]")
     ax3.set_title("Slope [°]", fontsize=11)
@@ -551,6 +558,6 @@ def plot_landslide(res, path, site_name=""):
                  f"{res['site_lat']:.4f}N {res['site_lon']:.4f}E",
                  fontsize=13, fontweight="bold")
     fig.tight_layout()
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
