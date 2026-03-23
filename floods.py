@@ -739,13 +739,19 @@ def report_flood(res, site_name=""):
 # ---------------------------------------------------------------------------
 
 def plot_topo_network(res, path, site_name="",
-                       hillshade=True, r86_m=150.0):
+                       hillshade=True, r86_m=150.0,
+                       jrc_occ=None, jrc_dx=None, jrc_dy=None):
     """
     Mappa topografica (hillshade + contour) con:
       - Reticolo idrografico estratto dal DEM (blu tenue)
       - Waterway OSM (blu intenso, più spesso)
-      - Cerchio r86 e zona GLO-30
+      - Overlay JRC Global Surface Water occurrence (opzionale)
+      - Cerchio r86 e zona interna
       - Sensore
+
+    jrc_occ : 2D array occurrence [0-100], stessa griglia di jrc_dx/jrc_dy
+    jrc_dx  : 2D array Easting [km] centrato sul sensore
+    jrc_dy  : 2D array Northing [km] centrato sul sensore
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -788,6 +794,15 @@ def plot_topo_network(res, path, site_name="",
     except Exception:
         pass
 
+    # JRC Global Surface Water occurrence
+    if (jrc_occ is not None and
+            jrc_dx is not None and jrc_dy is not None):
+        occ_norm = np.clip(jrc_occ / 100.0, 0.0, 1.0)
+        occ_disp = np.where(occ_norm > 0.05, occ_norm, np.nan)
+        ax.pcolormesh(jrc_dx, jrc_dy, occ_disp,
+                      cmap="Blues", vmin=0.0, vmax=1.0,
+                      shading="auto", alpha=0.75, zorder=4)
+
     # Reticolo DEM
     _overlay_network(ax, res, color="#4393c3",
                      lw_scale=1.0, alpha=0.6)
@@ -826,18 +841,18 @@ def plot_topo_network(res, path, site_name="",
               fontsize=8, loc="upper right",
               framealpha=0.85)
 
-    lim = res["lons_m"].shape[0]  # dummy
-    r_ext = float(np.max(np.abs(DX))) * 1.02
-    ax.set_xlim(-r_ext, r_ext)
-    ax.set_ylim(-float(np.max(np.abs(DY)))*1.02,
-                 float(np.max(np.abs(DY)))*1.02)
+    clip_km = res["r_inner_km"] * 1.5
+    ax.set_xlim(-clip_km, clip_km)
+    ax.set_ylim(-clip_km, clip_km)
     ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]", fontsize=11)
     ax.set_ylabel("Northing [km]", fontsize=11)
+    jrc_note = "  |  Blue fill = JRC water occurrence" \
+               if jrc_occ is not None else ""
     ax.set_title(
         f"Topography + Drainage Network  |  {site_name}\n"
-        f"Blue thin = DEM-derived  |  Blue thick = OSM waterways",
-        fontsize=12, fontweight="bold")
+        f"Thin blue = DEM network  |  Thick blue = OSM{jrc_note}",
+        fontsize=11, fontweight="bold")
     ax.grid(True, alpha=0.2, lw=0.5)
 
     fig.tight_layout()
@@ -921,10 +936,9 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
                 arrowprops=dict(arrowstyle="->",
                                 color="black"))
 
-    r_ext_x = float(np.max(np.abs(DX))) * 1.02
-    r_ext_y = float(np.max(np.abs(DY))) * 1.02
-    ax.set_xlim(-r_ext_x, r_ext_x)
-    ax.set_ylim(-r_ext_y, r_ext_y)
+    clip_km = res["r_inner_km"] * 1.5
+    ax.set_xlim(-clip_km, clip_km)
+    ax.set_ylim(-clip_km, clip_km)
     ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
@@ -932,11 +946,10 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
                  "Red=low HAND (flood risk)  Blue=safe",
                  fontsize=11)
 
-    # ---- Right: istogramma HAND entro 5 km ----
+    # ---- Right: istogramma HAND entro r_inner_km ----
     ax2 = axes[1]
-    # Maschera 5 km
-    r_5km = 5.0
-    mask5 = (np.sqrt(DX**2 + DY**2) <= r_5km) & (hand < 50)
+    r_hist = res["r_inner_km"]
+    mask5 = (np.sqrt(DX**2 + DY**2) <= r_hist) & (hand < 50)
     h_vals= hand[mask5].ravel()
     h_vals= h_vals[h_vals < 50]
 
@@ -957,7 +970,7 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
         ax2.set_xlabel("HAND [m]")
         ax2.set_ylabel("Pixel count")
         pct_vh = float(np.sum(h_vals < 2)) / len(h_vals)
-        ax2.set_title(f"HAND distribution (r<5km)\n"
+        ax2.set_title(f"HAND distribution (r<{r_hist:.1f}km)\n"
                       f"HAND<2m: {pct_vh:.1%} of area",
                       fontsize=11)
 
@@ -993,8 +1006,7 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
     susc[np.isnan(res["hand"])] = np.nan
 
     r86_km  = r86_m / 1000.0
-    r_ext_x = float(np.max(np.abs(DX))) * 1.02
-    r_ext_y = float(np.max(np.abs(DY))) * 1.02
+    clip_km = res["r_inner_km"] * 1.5
     cx86, cy86 = _circle(r86_km)
 
     fig, axes = plt.subplots(1, 3, figsize=(22, 8),
@@ -1011,8 +1023,8 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
     _overlay_osm_waterways(ax, res, alpha=0.85)
     ax.plot(cx86, cy86, "k--", lw=1.5)
     ax.plot(0, 0, "k^", ms=10, zorder=8)
-    ax.set_xlim(-r_ext_x, r_ext_x)
-    ax.set_ylim(-r_ext_y, r_ext_y)
+    ax.set_xlim(-clip_km, clip_km)
+    ax.set_ylim(-clip_km, clip_km)
     ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
@@ -1035,8 +1047,8 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
         label=FLOOD_LABELS[i]) for i in range(5)]
     ax2.legend(handles=patches, fontsize=8,
                loc="upper right", framealpha=0.85)
-    ax2.set_xlim(-r_ext_x, r_ext_x)
-    ax2.set_ylim(-r_ext_y, r_ext_y)
+    ax2.set_xlim(-clip_km, clip_km)
+    ax2.set_ylim(-clip_km, clip_km)
     ax2.set_aspect("equal")
     ax2.set_xlabel("Easting [km]")
     sc  = res["susc_at_sensor"]

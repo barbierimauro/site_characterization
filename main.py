@@ -1011,7 +1011,10 @@ def main():
         _plot(_outpath("crns_flood_topo.png"),
               plot_topo_network, flood_result,
               _outpath("crns_flood_topo.png"),
-              site_name=NAME, r86_m=r86)
+              site_name=NAME, r86_m=r86,
+              jrc_occ=water.get("occ_map_dem"),
+              jrc_dx=dx_grid / 1000.0,
+              jrc_dy=dy_grid / 1000.0)
         _plot(_outpath("crns_flood_hand.png"),
               plot_hand, flood_result,
               _outpath("crns_flood_hand.png"),
