@@ -359,60 +359,73 @@ def compute_kappa_topo(elev, dx_grid, dy_grid, dist_grid, sz, r86, z86_cm,
 # HORIZON ANGLES — parallel
 # =============================================================================
 
-_G_TREE      = None
-_G_ELEV_FLAT = None
-_G_SENSOR_Z  = None
+def _horizon_cache_path(lat, lon, sz, azimuth_step_deg, max_radius_m, dem_shape):
+    tag = (f"{lat:.6f}_{lon:.6f}_{sz:.2f}_"
+           f"{azimuth_step_deg:.3f}_{max_radius_m:.1f}_"
+           f"{dem_shape[0]}x{dem_shape[1]}")
+    key = hashlib.sha256(tag.encode()).hexdigest()[:16]
+    return _outpath(f"horizon_cache_{key}.npz")
 
-def _init_horizon(pts, elev_flat, sensor_z):
-    global _G_TREE, _G_ELEV_FLAT, _G_SENSOR_Z
-    from scipy.spatial import cKDTree
-    _G_TREE      = cKDTree(pts)
-    _G_ELEV_FLAT = elev_flat
-    _G_SENSOR_Z  = sensor_z
-
-def _work_horizon(args):
-    az_batch, r_vals, sx, sy = args
-    out = []
-    for az in az_batch:
-        ar  = np.radians(az)
-        px  = sx + r_vals * np.sin(ar)
-        py  = sy + r_vals * np.cos(ar)
-        _, idx = _G_TREE.query(np.column_stack([px, py]))
-        ev  = _G_ELEV_FLAT[idx]
-        ok  = ~np.isnan(ev)
-        if not np.any(ok):
-            out.append(0.0); continue
-        dz  = ev[ok] - _G_SENSOR_Z
-        ang = np.degrees(np.arctan2(dz, r_vals[ok]))
-        out.append(max(0.0, float(ang.max())))
-    return out
 
 def compute_horizon_angles(elev, dx_grid, dy_grid, sx, sy, sz,
-                            azimuth_step_deg, max_radius_m, n_cores=N_CORES):
-    """Compute horizon elevation angle (deg) for every azimuth."""
-    azimuths  = np.arange(0, 360, azimuth_step_deg)
-    n_az      = len(azimuths)
-    r_vals    = np.arange(10, max_radius_m, 20.0)
-    n_r       = len(r_vals)
-    pts       = np.column_stack([dx_grid.ravel(), dy_grid.ravel()])
-    elev_flat = elev.ravel()
-    batches   = np.array_split(azimuths, n_cores)
-    n_b       = len(batches)
-    print(f"   Horizon: {n_az} az x {n_r} r  [{n_cores} cores]", flush=True)
-    args   = [(b, r_vals, sx, sy) for b in batches]
-    parts  = [None] * n_b
-    t0     = time.perf_counter()
-    ctx    = mp.get_context("spawn")
-    with ctx.Pool(n_cores, initializer=_init_horizon,
-                  initargs=(pts, elev_flat, sz)) as pool:
-        for i, res in enumerate(pool.imap(_work_horizon, args)):
-            parts[i] = res
-            el  = time.perf_counter() - t0
-            eta = el / (i+1) * (n_b - i - 1)
-            print(f"   Horizon  {i+1}/{n_b}  elapsed={el:.1f}s  ETA={eta:.1f}s",
-                  flush=True)
-    horizon = np.array([v for p in parts for v in p])
+                            azimuth_step_deg, max_radius_m, n_cores=N_CORES,
+                            cache_dir=None, lat=None, lon=None):
+    """
+    Compute horizon elevation angle (deg) for every azimuth.
+
+    Vectorised implementation using RegularGridInterpolator — no
+    multiprocessing overhead.  Results are cached to a .npz file keyed
+    on (lat, lon, sensor_z, az_step, radius, dem_shape).
+    """
+    from scipy.interpolate import RegularGridInterpolator
+
+    azimuths = np.arange(0, 360, azimuth_step_deg)
+    n_az     = len(azimuths)
+    r_vals   = np.arange(10, max_radius_m, 20.0)
+    n_r      = len(r_vals)
+
+    # Cache check
+    cache_file = None
+    if lat is not None and lon is not None:
+        cache_file = _horizon_cache_path(
+            lat, lon, sz, azimuth_step_deg, max_radius_m, elev.shape)
+        if os.path.exists(cache_file):
+            d = np.load(cache_file)
+            print(f"   Horizon: from cache  ({cache_file})", flush=True)
+            return d["azimuths"], d["horizon"]
+
+    print(f"   Horizon: {n_az} az x {n_r} r  [vectorised]", flush=True)
+    t0 = time.perf_counter()
+
+    # Build RegularGridInterpolator on the regular (dy, dx) meter grid.
+    # dx_grid varies only along columns; dy_grid only along rows.
+    dx_1d = dx_grid[0, :]
+    dy_1d = dy_grid[:, 0]
+    elev_clean = np.where(np.isnan(elev), float(np.nanmean(elev)), elev)
+
+    interp = RegularGridInterpolator(
+        (dy_1d, dx_1d), elev_clean,
+        method="linear", bounds_error=False,
+        fill_value=float(np.nanmean(elev_clean)))
+
+    # All ray sample points: shape (n_az, n_r)
+    az_rad = np.radians(azimuths)
+    px = sx + r_vals[None, :] * np.sin(az_rad[:, None])   # (n_az, n_r)
+    py = sy + r_vals[None, :] * np.cos(az_rad[:, None])
+
+    pts   = np.column_stack([py.ravel(), px.ravel()])
+    elevs = interp(pts).reshape(n_az, n_r)
+
+    dz   = elevs - sz
+    angs = np.degrees(np.arctan2(dz, r_vals[None, :]))
+    horizon = np.maximum(0.0, angs.max(axis=1))
+
     print(f"   Horizon done  total={time.perf_counter()-t0:.1f}s", flush=True)
+
+    if cache_file is not None:
+        np.savez_compressed(cache_file, azimuths=azimuths, horizon=horizon)
+        print(f"   Horizon cached -> {cache_file}", flush=True)
+
     return azimuths, horizon
 
 # =============================================================================
@@ -580,7 +593,8 @@ def main():
     print("\n[4] Computing horizon angles ...")
     azimuths, horizon = compute_horizon_angles(
         elev, dx_grid, dy_grid, sx, sy, sz,
-        AZIMUTH_STEP_DEG, DEM_RADIUS_M, N_CORES)
+        AZIMUTH_STEP_DEG, DEM_RADIUS_M, N_CORES,
+        cache_dir=_OUT, lat=LAT, lon=LON)
 
     # 5 — kappa_muon
     print("\n[5] Computing kappa_muon ...")

@@ -305,8 +305,15 @@ def load_cells(lat, lon, radius_m, token, cache_dir, verbose=True):
             radios[r] = radios.get(r,0)+1
         print(f"   Cells: {len(cells)} found  {radios}", flush=True)
 
-    with gzip.open(gz, "wt") as f:
-        json.dump(cells, f)
+    # Salva in cache solo se ha trovato celle — risultati vuoti potrebbero
+    # essere dovuti a token placeholder o errore silenzioso dell'API.
+    if cells:
+        with gzip.open(gz, "wt") as f:
+            json.dump(cells, f)
+    else:
+        if verbose:
+            print("   Cells: risultato vuoto, non salvato in cache "
+                  "(verificare token OpenCelliD)", flush=True)
 
     return cells
 
