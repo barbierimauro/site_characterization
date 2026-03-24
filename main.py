@@ -46,17 +46,27 @@ LAT = 45.467279
 LON = 11.763470
 LAT = 45.338058
 
+NAME = "monturaqui_crater"
+LAT = -23.927681
+LON = -68.261560
+
+
 #================
 
-NAME = "RAVALLES"
-# RA VALLES
-LON             = 12.077010   # decimal degrees WGS84
-LAT             = 46.548503   # decimal degrees WGS84
+NAME = "monturaqui_archeo"
+LON             = -68.382350
+LAT             = -24.032953
+DEM_RADIUS_M    = 5000.0      # per questo sito OBBLIGATORIO : commentare quello successivo
+
+
+
+#===================
+
+#DEM_RADIUS_M    = 2000.0      # DEM download radius (m)
 
 SENSOR_HEIGHT_M = 2.0         # sensor height above ground (m)
 RHO_BULK        = 1.4         # soil bulk density (g/cm3)
 THETA_V_INIT    = 0.20        # soil moisture estimate for r86/z86 (m3/m3)
-DEM_RADIUS_M    = 2000.0      # DEM download radius (m)
 AZIMUTH_STEP_DEG= 2.0         # azimuth resolution for horizon scan (deg)
 OUTPUT_DIR      = NAME
 OPENTOPO_API_KEY= ""
