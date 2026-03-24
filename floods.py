@@ -817,6 +817,13 @@ def plot_topo_network(res, path, site_name="",
     elev   = res["elev_m"].astype(float)
     elev[np.isnan(elev)] = float(np.nanmean(elev))
 
+    # Colorscale bounds from the *displayed* region only
+    clip_km = res["r_inner_km"] * 1.5
+    _vis  = (np.abs(DX) <= clip_km) & (np.abs(DY) <= clip_km)
+    _ev   = elev[_vis] if np.any(_vis) else elev
+    _vmin = float(np.nanmin(_ev))
+    _vmax = float(np.nanmax(_ev))
+
     fig, ax = plt.subplots(1, 1, figsize=(14, 12),
                             facecolor="white")
 
@@ -831,6 +838,7 @@ def plot_topo_network(res, path, site_name="",
 
     # Quota con colore (terrain)
     im = ax.pcolormesh(DX, DY, elev, cmap="terrain",
+                        vmin=_vmin, vmax=_vmax,
                         alpha=0.5, shading="auto", zorder=2)
     plt.colorbar(im, ax=ax, label="Elevation [m a.s.l.]",
                  shrink=0.6)
@@ -839,8 +847,8 @@ def plot_topo_network(res, path, site_name="",
     try:
         cs = ax.contour(DX, DY, elev,
                          levels=np.arange(
-                             int(np.nanmin(elev)//100*100),
-                             int(np.nanmax(elev)//100*100)+100, 100),
+                             int(_vmin//100*100),
+                             int(_vmax//100*100)+100, 100),
                          colors="gray", linewidths=0.4,
                          alpha=0.5, zorder=3)
         ax.clabel(cs, inline=True, fontsize=6,
@@ -895,10 +903,9 @@ def plot_topo_network(res, path, site_name="",
               fontsize=8, loc="upper right",
               framealpha=0.85)
 
-    clip_km = res["r_inner_km"] * 1.5
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]", fontsize=11)
     ax.set_ylabel("Northing [km]", fontsize=11)
     jrc_note = "  |  Blue fill = JRC water occurrence" \
@@ -993,7 +1000,7 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
     clip_km = res["r_inner_km"] * 1.5
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
     ax.set_title("HAND — Height Above Nearest Drainage\n"
@@ -1079,7 +1086,7 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
     ax.plot(0, 0, "k^", ms=10, zorder=8)
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
     ax.set_title("Flood Risk Index (FRI)\n"
@@ -1103,7 +1110,7 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
                loc="upper right", framealpha=0.85)
     ax2.set_xlim(-clip_km, clip_km)
     ax2.set_ylim(-clip_km, clip_km)
-    ax2.set_aspect("equal", adjustable="datalim")
+    ax2.set_aspect("equal")
     ax2.set_xlabel("Easting [km]")
     sc  = res["susc_at_sensor"]
     lbl = FLOOD_LABELS[5-sc] if 1<=sc<=5 else "?"

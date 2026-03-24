@@ -359,7 +359,7 @@ def plot_maps(res, dx_grid, dy_grid, dist_grid, r86, path,
                          f"Most recent: {cur_date}", fontsize=11)
             ax.set_xlabel("Easting offset (m)")
             ax.set_ylabel("Northing offset (m)")
-            ax.set_aspect("equal", adjustable="datalim")
+            ax.set_aspect("equal")
             ax.legend(fontsize=8, loc="upper right")
             panel_i += 1
 
@@ -408,7 +408,7 @@ def plot_maps(res, dx_grid, dy_grid, dist_grid, r86, path,
                          f"Most recent: {cur_date}", fontsize=11)
             ax.set_xlabel("Easting offset (m)")
             ax.set_ylabel("Northing offset (m)")
-            ax.set_aspect("equal", adjustable="datalim")
+            ax.set_aspect("equal")
             ax.legend(fontsize=8, loc="upper right")
             panel_i += 1
 
