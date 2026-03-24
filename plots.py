@@ -32,7 +32,8 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
                         np.where(np.isnan(elev), np.nanmean(elev), elev), np.nan)
         ext  = [dx_grid.min(), dx_grid.max(), dy_grid.min(), dy_grid.max()]
         im   = ax1.imshow(em, extent=ext, origin="upper",
-                          cmap="terrain", aspect="equal", interpolation="bilinear")
+                          cmap="terrain", interpolation="bilinear")
+        ax1.set_aspect("equal", adjustable="datalim")
         plt.colorbar(im, ax=ax1, fraction=0.03, pad=0.02).set_label(
             "Elevation (m a.s.l.)", fontsize=10)
         th = np.linspace(0, 2*np.pi, 360)
@@ -780,7 +781,7 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
             plt.colorbar(cm, ax=ax, fraction=0.03, pad=0.02).set_label(
                 'TWI  ln[a / tan\u03b2]', fontsize=9)
         _circle(ax)
-        ax.set_aspect('equal')
+        ax.set_aspect('equal', adjustable='datalim')
         ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
         ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
         ax.set_title(f'Topographic Wetness Index\nCRNS-weighted = {float(twi_w):.2f}'
@@ -795,7 +796,7 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
                                 cmap='YlOrRd', shading='auto', vmin=0, vmax=vhi_sl)
             plt.colorbar(cm2, ax=ax, fraction=0.03, pad=0.02).set_label('Slope (\u00b0)', fontsize=9)
         _circle(ax)
-        ax.set_aspect('equal')
+        ax.set_aspect('equal', adjustable='datalim')
         ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
         ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
         ax.set_title(f'Slope Map\nMean within footprint = {float(sl_mean):.1f}\u00b0')
@@ -992,10 +993,14 @@ def plot_water(water, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
                 ax.contour(dx_grid, dy_grid, (~np.isnan(occ_hl)).astype(float),
                            levels=[0.5], colors=['#e74c3c'], linewidths=1.2,
                            linestyles='--')
+        else:
+            ax.text(0.5, 0.5, 'JRC water data\nnot available',
+                    ha='center', va='center', transform=ax.transAxes,
+                    fontsize=13, color='gray', style='italic')
         ax.plot(r86 * np.sin(th), r86 * np.cos(th), 'k--', lw=2,
                 label=f'r86={r86:.0f} m')
         ax.plot(0, 0, 'k^', ms=10, zorder=5, label='Sensor')
-        ax.set_aspect('equal')
+        ax.set_aspect('equal', adjustable='datalim')
         ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
         ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
         ax.set_title(f'JRC Surface Water Occurrence\n'

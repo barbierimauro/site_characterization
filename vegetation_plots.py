@@ -181,7 +181,7 @@ def plot_timeseries(res, path, site_name=""):
     ls_dates = np.array([_to_decimal_year(s["date"]) for s in ls_ts])
 
     with plt.rc_context(STYLE):
-        fig, axes = plt.subplots(5, 1, figsize=(14, 18),
+        fig, axes = plt.subplots(5, 1, figsize=(14, 14),
                                   sharex=False)
         fig.subplots_adjust(hspace=0.38)
 
@@ -359,7 +359,7 @@ def plot_maps(res, dx_grid, dy_grid, dist_grid, r86, path,
                          f"Most recent: {cur_date}", fontsize=11)
             ax.set_xlabel("Easting offset (m)")
             ax.set_ylabel("Northing offset (m)")
-            ax.set_aspect("equal")
+            ax.set_aspect("equal", adjustable="datalim")
             ax.legend(fontsize=8, loc="upper right")
             panel_i += 1
 
@@ -408,13 +408,13 @@ def plot_maps(res, dx_grid, dy_grid, dist_grid, r86, path,
                          f"Most recent: {cur_date}", fontsize=11)
             ax.set_xlabel("Easting offset (m)")
             ax.set_ylabel("Northing offset (m)")
-            ax.set_aspect("equal")
+            ax.set_aspect("equal", adjustable="datalim")
             ax.legend(fontsize=8, loc="upper right")
             panel_i += 1
 
-        # Nasconde pannelli vuoti
+        # Rimuove pannelli vuoti
         for j in range(panel_i, len(ax_flat)):
-            ax_flat[j].set_visible(False)
+            fig.delaxes(ax_flat[j])
 
         title = f"Vegetation Maps  |  {site_name}  " \
                 f"|  {res['lat']:.4f}N {res['lon']:.4f}E"

@@ -898,7 +898,7 @@ def plot_topo_network(res, path, site_name="",
     clip_km = res["r_inner_km"] * 1.5
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal")
+    ax.set_aspect("equal", adjustable="datalim")
     ax.set_xlabel("Easting [km]", fontsize=11)
     ax.set_ylabel("Northing [km]", fontsize=11)
     jrc_note = "  |  Blue fill = JRC water occurrence" \
@@ -993,7 +993,7 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
     clip_km = res["r_inner_km"] * 1.5
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal")
+    ax.set_aspect("equal", adjustable="datalim")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
     ax.set_title("HAND — Height Above Nearest Drainage\n"
@@ -1079,7 +1079,7 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
     ax.plot(0, 0, "k^", ms=10, zorder=8)
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal")
+    ax.set_aspect("equal", adjustable="datalim")
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
     ax.set_title("Flood Risk Index (FRI)\n"
@@ -1103,7 +1103,7 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
                loc="upper right", framealpha=0.85)
     ax2.set_xlim(-clip_km, clip_km)
     ax2.set_ylim(-clip_km, clip_km)
-    ax2.set_aspect("equal")
+    ax2.set_aspect("equal", adjustable="datalim")
     ax2.set_xlabel("Easting [km]")
     sc  = res["susc_at_sensor"]
     lbl = FLOOD_LABELS[5-sc] if 1<=sc<=5 else "?"
