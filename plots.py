@@ -761,8 +761,11 @@ def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
         fig.suptitle(
             f"Thermal Correction  |  {lat:.4f}N {lon:.4f}E  |  Alt={sensor_alt:.0f} m",
             fontsize=14, fontweight='bold')
-        fig.tight_layout()
-        fig.savefig(path, dpi=100, bbox_inches='tight')
+        # rect=[0,0,1,0.95]: riserva il 5% superiore per la suptitle
+        # Senza rect, tight_layout ignora la suptitle e la taglia via;
+        # bbox_inches='tight' poi produce un layout ritratto sformato.
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        fig.savefig(path, dpi=100)
         plt.close(fig)
     print(f"  Saved: {path}")
 

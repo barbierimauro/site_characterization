@@ -817,12 +817,19 @@ def plot_topo_network(res, path, site_name="",
     elev   = res["elev_m"].astype(float)
     elev[np.isnan(elev)] = float(np.nanmean(elev))
 
-    # Colorscale bounds from the *displayed* region only
     clip_km = res["r_inner_km"] * 1.5
-    _vis  = (np.abs(DX) <= clip_km) & (np.abs(DY) <= clip_km)
-    _ev   = elev[_vis] if np.any(_vis) else elev
-    _vmin = float(np.nanmin(_ev))
-    _vmax = float(np.nanmax(_ev))
+
+    # Colorscale bounds: usa solo la regione entro r86 × 3 (o 2 km max)
+    # per evitare che vette/montagne lontane distorcano la scala locale
+    scale_km = min(r86_m / 1000.0 * 3.0, 2.0, clip_km)
+    _vis_scale = (np.sqrt(DX**2 + DY**2) <= scale_km)
+    _ev   = elev[_vis_scale] if np.any(_vis_scale) else elev.ravel()
+    _vmin = float(np.nanpercentile(_ev, 2))
+    _vmax = float(np.nanpercentile(_ev, 98))
+    # Garantisce almeno 5 m di escursione per non avere colorbar piatta
+    if _vmax - _vmin < 5:
+        _mid = (_vmin + _vmax) / 2
+        _vmin, _vmax = _mid - 2.5, _mid + 2.5
 
     fig, ax = plt.subplots(1, 1, figsize=(14, 12),
                             facecolor="white")
@@ -905,7 +912,9 @@ def plot_topo_network(res, path, site_name="",
 
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal")
+    # Non imporre set_aspect("equal") su subplot con colorbar:
+    # crea un effetto "francobollo". xlim/ylim già eguali garantiscono
+    # un'area quasi quadrata senza restringere il box dell'axes.
     ax.set_xlabel("Easting [km]", fontsize=11)
     ax.set_ylabel("Northing [km]", fontsize=11)
     jrc_note = "  |  Blue fill = JRC water occurrence" \
@@ -916,8 +925,8 @@ def plot_topo_network(res, path, site_name="",
         fontsize=11, fontweight="bold")
     ax.grid(True, alpha=0.2, lw=0.5)
 
-    fig.tight_layout()
-    fig.savefig(path, dpi=100, bbox_inches="tight")
+    fig.tight_layout(rect=[0, 0, 1, 1])
+    fig.savefig(path, dpi=100)
     plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -1000,7 +1009,10 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
     clip_km = res["r_inner_km"] * 1.5
     ax.set_xlim(-clip_km, clip_km)
     ax.set_ylim(-clip_km, clip_km)
-    ax.set_aspect("equal")
+    # NON usare set_aspect("equal") su subplot con colorbar:
+    # matplotlib shrinkherebbe la mappa a un francobollo.
+    # xlim e ylim hanno già la stessa escursione (±clip_km), quindi
+    # il plot è quasi quadrato senza forzare l'aspect ratio.
     ax.set_xlabel("Easting [km]")
     ax.set_ylabel("Northing [km]")
     ax.set_title("HAND — Height Above Nearest Drainage\n"
@@ -1039,8 +1051,8 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
                  f"{res['site_lat']:.4f}N "
                  f"{res['site_lon']:.4f}E",
                  fontsize=13, fontweight="bold")
-    fig.tight_layout()
-    fig.savefig(path, dpi=100, bbox_inches="tight")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.savefig(path, dpi=100)
     plt.close(fig)
     print(f"  Saved: {path}")
 

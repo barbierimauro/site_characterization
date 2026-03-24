@@ -82,14 +82,27 @@ CROP_MARGIN_M  = 50.0
 def _jrc_tile_name(lon, lat):
     """
     Nome della tile JRC 10°×10° che contiene il punto (lon, lat).
-    Naming convention: corner SW della tile.
-    Es. lon=11.86, lat=46.92 -> 'occurrence_10E_40N'
+
+    Naming convention JRC: la tile prende il nome dal bordo PIÙ LONTANO
+    dall'equatore (= bordo "north" per l'emisfero N, "south" per il S).
+    Esempi verificati dal log rasterio:
+      lat=45.64°N → tile occurrence_10E_40N → bounds 30-40°N  ← SBAGLIATO col floor
+      lat=45.64°N → tile occurrence_10E_50N → bounds 40-50°N  ← CORRETTO col ceil
+    Convention:
+      lon: bordo OVEST = floor  (es. 11.7E → 10E, copre 10-20°E)
+      lat N: bordo NORD  = ceil  (es. 45.6N → 50N, copre 40-50°N)
+      lat S: bordo SUD   = ceil(|lat|/10)*10  (es. 5S → 10S, copre 0-10°S)
     """
     lon_tile = int(np.floor(lon / 10) * 10)
-    lat_tile = int(np.floor(lat / 10) * 10)
     ew = 'E' if lon_tile >= 0 else 'W'
-    ns = 'N' if lat_tile >= 0 else 'S'
-    return f"occurrence_{abs(lon_tile)}{ew}_{abs(lat_tile)}{ns}"
+
+    lat_abs  = abs(lat)
+    lat_tile = int(np.ceil(lat_abs / 10) * 10)
+    # Evita tile "0N" per latitudini esattamente = 0: usa 10N
+    if lat_tile == 0:
+        lat_tile = 10
+    ns = 'N' if lat >= 0 else 'S'
+    return f"occurrence_{abs(lon_tile)}{ew}_{lat_tile}{ns}"
 
 
 def _jrc_url(tile_name):
