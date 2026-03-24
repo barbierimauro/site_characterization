@@ -566,7 +566,7 @@ def plot_landslide(res, path, site_name="", r86_m=150.0):
     ax.legend(handles=patches, fontsize=8, loc="upper right")
     ax.set_xlim(-clip, clip)
     ax.set_ylim(-clip, clip)
-    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_aspect("equal")
     ax.set_xlabel("Easting [km]"); ax.set_ylabel("Northing [km]")
     ax.set_title("Susceptibility classes\n(infinite slope model)",
                  fontsize=11)
@@ -586,7 +586,7 @@ def plot_landslide(res, path, site_name="", r86_m=150.0):
     plt.colorbar(im2, ax=ax2, label="FS")
     ax2.set_xlim(-clip, clip)
     ax2.set_ylim(-clip, clip)
-    ax2.set_aspect("equal", adjustable="datalim")
+    ax2.set_aspect("equal")
     ax2.set_xlabel("Easting [km]")
     ax2.set_title("Safety Factor (FS)\n"
                   "Red=FS<1  Orange=FS<1.5", fontsize=11)
@@ -601,7 +601,7 @@ def plot_landslide(res, path, site_name="", r86_m=150.0):
     plt.colorbar(im3, ax=ax3, label="Slope [°]")
     ax3.set_xlim(-clip, clip)
     ax3.set_ylim(-clip, clip)
-    ax3.set_aspect("equal", adjustable="datalim")
+    ax3.set_aspect("equal")
     ax3.set_xlabel("Easting [km]")
     ax3.set_title("Slope [°]", fontsize=11)
 

@@ -33,7 +33,7 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
         ext  = [dx_grid.min(), dx_grid.max(), dy_grid.min(), dy_grid.max()]
         im   = ax1.imshow(em, extent=ext, origin="upper",
                           cmap="terrain", interpolation="bilinear")
-        ax1.set_aspect("equal", adjustable="datalim")
+        ax1.set_aspect("equal")
         plt.colorbar(im, ax=ax1, fraction=0.03, pad=0.02).set_label(
             "Elevation (m a.s.l.)", fontsize=10)
         th = np.linspace(0, 2*np.pi, 360)
@@ -93,6 +93,13 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
         ax4.set_title(f"N-S cross-section  (r86={r86:.0f} m)")
         ax4.legend(fontsize=8)
         ax4.set_xlim(-dem_radius_m*0.5, dem_radius_m*0.5)
+
+        # Sync E-W and N-S elevation scales so terrain relief is directly comparable
+        _ylo = min(np.nanmin(elev[mr, :]), np.nanmin(elev[:, mc]))
+        _yhi = max(np.nanmax(elev[mr, :]), np.nanmax(elev[:, mc]))
+        _ypad = (_yhi - _ylo) * 0.05
+        ax3.set_ylim(_ylo - _ypad, _yhi + _ypad)
+        ax4.set_ylim(_ylo - _ypad, _yhi + _ypad)
 
         # Kappa summary bar
         ax5  = fig.add_subplot(gs[1, 2])
@@ -616,6 +623,11 @@ def plot_soil(soil, path, lat, lon):
         y = np.arange(len(PROPS))
         ax.barh(y, means, xerr=uncs, color=COLS, alpha=0.82, edgecolor='white',
                 height=0.7, capsize=4, error_kw=dict(lw=1.5, capthick=1.5))
+        _x_max = max((m for m in means if not np.isnan(m)), default=1.0)
+        for i, (m, u) in enumerate(zip(means, uncs)):
+            if not np.isnan(m):
+                ax.text(m + u + _x_max * 0.02, i, f'{m:.3g}',
+                        va='center', ha='left', fontsize=9)
         ax.set_yticks(y); ax.set_yticklabels(lbls, fontsize=9)
         ax.set_xlabel('CRNS-weighted mean value')
         ax.set_title('CRNS-Weighted Soil Properties\n(z86 exponential depth weighting)')
@@ -663,9 +675,14 @@ def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
         ax.plot(_MX, t_corr, 'o-',  color='#e67e22', lw=2.5, ms=8, label='T_mean site-corrected')
         ax.axhline(0, color='gray', ls=':', lw=1)
         ax2 = ax.twinx()
+        ax2.spines['right'].set_visible(True)
+        _dT_valid = dT[~np.isnan(dT)]
         ax2.bar(_MX, dT, color=['#e74c3c' if d > 0 else '#3498db' for d in dT],
                 alpha=0.40, width=0.6, label='\u0394T (corr \u2212 ERA5)')
         ax2.axhline(0, color='gray', ls=':', lw=1)
+        if len(_dT_valid):
+            _dt_abs = max(abs(float(np.nanmax(dT))), abs(float(np.nanmin(dT))), 0.5)
+            ax2.set_ylim(-_dt_abs * 2.5, _dt_abs * 2.5)
         ax2.set_ylabel('\u0394T (\u00b0C)', fontsize=10)
         ax.set_xticks(_MX); ax.set_xticklabels(_MONTHS, fontsize=9)
         ax.set_ylabel('Temperature (\u00b0C)')
@@ -743,7 +760,8 @@ def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
 
         fig.suptitle(
             f"Thermal Correction  |  {lat:.4f}N {lon:.4f}E  |  Alt={sensor_alt:.0f} m",
-            fontsize=14, fontweight='bold', y=1.01)
+            fontsize=14, fontweight='bold')
+        fig.tight_layout()
         fig.savefig(path, dpi=100, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
@@ -781,7 +799,7 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
             plt.colorbar(cm, ax=ax, fraction=0.03, pad=0.02).set_label(
                 'TWI  ln[a / tan\u03b2]', fontsize=9)
         _circle(ax)
-        ax.set_aspect('equal', adjustable='datalim')
+        ax.set_aspect('equal')
         ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
         ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
         ax.set_title(f'Topographic Wetness Index\nCRNS-weighted = {float(twi_w):.2f}'
@@ -796,7 +814,7 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
                                 cmap='YlOrRd', shading='auto', vmin=0, vmax=vhi_sl)
             plt.colorbar(cm2, ax=ax, fraction=0.03, pad=0.02).set_label('Slope (\u00b0)', fontsize=9)
         _circle(ax)
-        ax.set_aspect('equal', adjustable='datalim')
+        ax.set_aspect('equal')
         ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
         ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
         ax.set_title(f'Slope Map\nMean within footprint = {float(sl_mean):.1f}\u00b0')
@@ -1000,7 +1018,7 @@ def plot_water(water, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
         ax.plot(r86 * np.sin(th), r86 * np.cos(th), 'k--', lw=2,
                 label=f'r86={r86:.0f} m')
         ax.plot(0, 0, 'k^', ms=10, zorder=5, label='Sensor')
-        ax.set_aspect('equal', adjustable='datalim')
+        ax.set_aspect('equal')
         ax.set_xlim(-clip, clip); ax.set_ylim(-clip, clip)
         ax.set_xlabel('Easting offset (m)'); ax.set_ylabel('Northing offset (m)')
         ax.set_title(f'JRC Surface Water Occurrence\n'
