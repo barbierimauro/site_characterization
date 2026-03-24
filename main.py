@@ -1,15 +1,5 @@
 """
-CRNS Topographic & FOV Correction Tool
-=======================================
-Computes kappa (topographic volume correction) and muon FOV correction
-for a CRNS sensor given its geographic location.
-
-kappa_topo: ratio of real soil volume inside the theoretical flat-reference
-            slab (radius r86, depth z86) to the flat-reference volume.
-            Computed by DEM-cell summation — no iteration, no divergence.
-
-kappa_muon: fraction of the isotropic cosmic-muon flux actually reaching
-            the sensor after topographic obstruction.  Always <= 1.
+CRNS calibration
 
 DEM source: Copernicus GLO-30 (30 m) via AWS S3, cached locally.
 
@@ -56,13 +46,12 @@ LON = -68.261560
 NAME = "monturaqui_archeo"
 LON             = -68.382350
 LAT             = -24.032953
-DEM_RADIUS_M    = 5000.0      # per questo sito OBBLIGATORIO : commentare quello successivo
 
 
 
 #===================
 
-#DEM_RADIUS_M    = 2000.0      # DEM download radius (m)
+DEM_RADIUS_M    = 2000.0      # DEM download radius (m)
 
 SENSOR_HEIGHT_M = 2.0         # sensor height above ground (m)
 RHO_BULK        = 1.4         # soil bulk density (g/cm3)
@@ -283,92 +272,6 @@ def clip_dem_to_radius(elev, lats_grid, lons_grid, lat0, lon0, radius_m):
     dist = np.sqrt(dx**2 + dy**2)
     return elev, lats_grid, lons_grid, dx, dy, dist, dist <= radius_m
 
-# =============================================================================
-# KAPPA_TOPO — DEM cell summation (no iteration, no divergence)
-#
-# For each DEM pixel inside r86:
-#   overlap = max(0, min(z_sensor, z_DEM_pixel) - (z_sensor - z86_m))
-#           = how much of the reference slab column is actually filled by soil
-#   kappa = sum(W(r) * overlap * pixel_area) / sum(W(r) * z86_m * pixel_area)
-#
-# This is a purely geometric integral over the DEM.
-# r86 and z86 are fixed from THETA_V_INIT and local pressure — no iteration.
-# =============================================================================
-
-def compute_kappa_topo(elev, dx_grid, dy_grid, dist_grid, sz, r86, z86_cm,
-                       s_elev=0.0):
-    """
-    .. deprecated::
-        Use :func:`kappa_topo_3d.compute_kappa_topo_3d` instead.
-        This function uses a simplified DEM-cell summation approach;
-        ``compute_kappa_topo_3d`` implements a physically correct 3-D
-        ray-casting algorithm that supersedes it.
-
-    Compute kappa_topo by summing DEM pixel contributions.
-
-    Reference slab: vertical cylinder of radius r86 centred on sensor,
-    extending from the ground surface (s_elev) down to depth z86.
-    The sensor itself is ABOVE the ground at height SENSOR_HEIGHT_M —
-    this height is irrelevant for the soil volume calculation.
-
-    For each DEM pixel within r86:
-      z_top_soil = min(z_DEM_pixel, s_elev)   # soil surface capped at ref level
-      overlap    = max(0, z_top_soil - (s_elev - z86_m))
-                 = max(0, z_top_soil - z_bot_ref)
-
-    If z_DEM > s_elev: terrain is higher than sensor reference level
-      → overlap = z86_m (full column, overestimate condition)
-    If z_DEM = s_elev: flat terrain → overlap = z86_m (reference case, kappa=1)
-    If z_DEM < s_elev - z86_m: terrain drops below slab bottom → overlap = 0
-
-    Returns kappa and a 2D weight map for plotting.
-    """
-    warnings.warn(
-        "compute_kappa_topo is deprecated and will be removed in a future version. "
-        "Use compute_kappa_topo_3d from kappa_topo_3d instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    z86_m     = z86_cm / 100.0
-    
-    MAX_DEPTH = 2.0 # meters
-    
-    z_bot_ref = s_elev - MAX_DEPTH      # bottom of reference slab (below ground)
-
-    # Pixel area (m2) — approximate, uniform over footprint
-    nr, nc = elev.shape
-    dpx = abs(np.nanmedian(np.diff(dx_grid[nr//2, :])))
-    dpy = abs(np.nanmedian(np.diff(dy_grid[:, nc//2])))
-    if dpx < 1: dpx = 30.0
-    if dpy < 1: dpy = 30.0
-    pixel_area = dpx * dpy
-
-    # Mask: only pixels within r86
-    mask = (dist_grid <= r86) & ~np.isnan(elev)
-
-    r_pix   = dist_grid[mask]
-    e_pix   = elev[mask]
-
-    # Radial weight W(r)
-    W = weight_radial(r_pix, r86)
-
-    # Overlap: soil column inside slab [z_bot_ref, s_elev]
-    # z_top_soil = min(z_DEM, s_elev): soil surface capped at reference level
-    # If z_DEM > s_elev (terrain above ref): full column contributes
-    # If z_DEM < z_bot_ref: no contribution (terrain below slab)
-    z_top_soil = np.minimum(e_pix, s_elev)    # soil surface inside slab
-    overlap    = np.maximum(0.0, z_top_soil - z_bot_ref)
-    overlap    = np.minimum(overlap, z86_m)   # cap at z86
-
-    num = np.sum(W * overlap * pixel_area)
-    den = np.sum(W * z86_m  * pixel_area)
-    kappa = num / den if den > 0 else 1.0
-
-    # 2D weight map for plotting
-    wmap = np.full_like(elev, np.nan)
-    wmap[mask] = W * overlap / z86_m   # normalised effective weight
-
-    return kappa, wmap
 
 # =============================================================================
 # HORIZON ANGLES — parallel
@@ -1038,16 +941,6 @@ def main():
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")
     print(f"  Output dir : {_OUT}")
-    print(f"  Files:")
-    for fn in ["crns_report.txt", "crns_topo_main.png",
-               "crns_footprint.png", "crns_horizon.png", "crns_fov_detail.png",
-               "crns_climate.png", "crns_soil.png", "crns_thermal.png",
-               "crns_twi.png", "crns_kappa_budget.png", "crns_water.png",
-               "crns_veg_seasonal.png", "crns_veg_timeseries.png",
-               "crns_veg_maps.png"]:
-        p = _outpath(fn)
-        sz_kb = os.path.getsize(p)//1024 if os.path.exists(p) else 0
-        print(f"    {fn}  ({sz_kb} kB)")
 
 
 if __name__ == "__main__":
