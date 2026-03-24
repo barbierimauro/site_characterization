@@ -132,8 +132,14 @@ def _load_cache(cache_dir, lat, lon, radius_m):
             or abs(m['radius_m'] - radius_m) > 1.0):
         return None, None, None, None
     d = np.load(npz)
+    occ = d['occurrence']
+    # Scarta cache avvelenata: forma (1,1) indica un fallback da download fallito
+    if occ.shape == (1, 1):
+        print(f"   JRC: stale/poisoned cache (shape 1×1) ignored: {npz}",
+              flush=True)
+        return None, None, None, None
     print(f"   JRC loaded from cache: {npz}", flush=True)
-    return d['occurrence'], d['lons'], d['lats'], m['tile']
+    return occ, d['lons'], d['lats'], m['tile']
 
 
 def _weight_radial(r, r86):
@@ -156,16 +162,27 @@ def _download_jrc_crop(lat, lon, radius_m):
     Returns
     -------
     occ_crop  : 2D uint8 array, occurrence [0-100], 255=nodata->0
+                None se il download fallisce (non cacheable)
     lons_crop : 1D array, longitudine centro pixel [deg]
     lats_crop : 1D array, latitudine centro pixel [deg]
     tile_name : str
     """
+    import os
     try:
         import rasterio
+        import rasterio.windows as rwin
         from rasterio.windows import from_bounds
     except ImportError:
         raise ImportError("rasterio non installato. "
                           "pip install rasterio")
+
+    # GDAL/VSICURL config per HTTP Range-request su COG remoti
+    # (necessario su alcune configurazioni WSL2 / GDAL < 3.4)
+    os.environ.setdefault('GDAL_DISABLE_READDIR_ON_OPEN', 'EMPTY_DIR')
+    os.environ.setdefault('GDAL_HTTP_TIMEOUT',     '30')
+    os.environ.setdefault('GDAL_HTTP_MAX_RETRY',   '3')
+    os.environ.setdefault('GDAL_HTTP_RETRY_DELAY', '2')
+    os.environ.setdefault('CPL_VSIL_CURL_CACHE_SIZE', '100000000')
 
     tile_name = _jrc_tile_name(lon, lat)
     url       = _jrc_url(tile_name)
@@ -184,20 +201,40 @@ def _download_jrc_crop(lat, lon, radius_m):
           f"{south:.4f}–{north:.4f}N", flush=True)
 
     with rasterio.open(url) as src:
+        print(f"   JRC: raster {src.width}×{src.height} px  "
+              f"bounds=({src.bounds.left:.3f},{src.bounds.bottom:.3f},"
+              f"{src.bounds.right:.3f},{src.bounds.top:.3f})", flush=True)
+
         window = from_bounds(west, south, east, north,
                              transform=src.transform)
-        # Legge solo la finestra — rasterio gestisce i range request HTTP
-        data   = src.read(1, window=window)
-        # Calcola coordinate centro pixel per la finestra letta
+
+        # Interseca la finestra con i bounds reali del raster prima di leggere:
+        # previene data.size==0 dovuto a window parzialmente fuori dal raster
+        raster_win = rwin.Window(0, 0, src.width, src.height)
+        try:
+            window = window.intersection(raster_win)
+        except Exception as exc:
+            print(f"   JRC: window outside raster bounds ({exc}) "
+                  f"-> no surface water (NOT cached)", flush=True)
+            return None, np.array([lon]), np.array([lat]), tile_name
+
+        print(f"   JRC: window col={window.col_off:.1f}+{window.width:.1f}  "
+              f"row={window.row_off:.1f}+{window.height:.1f}", flush=True)
+
+        # boundless=True: legge anche ai bordi del raster senza restituire
+        # array vuoti per piccole inesattezze floating-point della finestra
+        data   = src.read(1, window=window,
+                          boundless=True, fill_value=JRC_NODATA)
         win_tf = src.window_transform(window)
 
-    # Finestra vuota: tile non copre l'area richiesta -> nessuna acqua
+    # Se data.size == 0 nonostante l'intersezione: GDAL VSICURL ha restituito
+    # dati vuoti (HTTP Range request fallita silenziosamente)
     if data.size == 0:
-        print(f"   JRC: empty window (tile {tile_name} does not cover area) "
-              f"-> assuming no surface water", flush=True)
-        lons_crop = np.array([lon])
-        lats_crop = np.array([lat])
-        return np.zeros((1, 1), dtype=np.uint8), lons_crop, lats_crop, tile_name
+        print(f"   JRC: GDAL returned empty data for valid window — "
+              f"likely VSICURL/HTTP Range-request failure.\n"
+              f"   Verify: gdal-config --formats | grep HTTP  "
+              f"and GDAL_HTTP_* env vars.  Result NOT cached.", flush=True)
+        return None, np.array([lon]), np.array([lat]), tile_name
 
     nr, nc = data.shape
 
@@ -326,8 +363,18 @@ def compute_water_eta(
         print("   JRC: no cache, downloading ...", flush=True)
         occ_crop, lons_crop, lats_crop, tile_name = \
             _download_jrc_crop(lat, lon, r86)
-        _save_cache(cache_dir, lat, lon, r86,
-                    occ_crop, lons_crop, lats_crop, tile_name)
+        # Solo salva la cache se il download ha prodotto dati validi
+        # (occ_crop is None indica un fallimento — non cacheare)
+        if occ_crop is not None:
+            _save_cache(cache_dir, lat, lon, r86,
+                        occ_crop, lons_crop, lats_crop, tile_name)
+        else:
+            print("   JRC: download failed — result NOT cached; "
+                  "will retry on next run.", flush=True)
+            # Usa array (1,1) di zero come placeholder per questo run
+            occ_crop = np.zeros((1, 1), dtype=np.uint8)
+            lons_crop = np.array([lon])
+            lats_crop = np.array([lat])
 
     # ------------------------------------------------------------------ #
     # 2. Ricampiona sulla griglia DEM
