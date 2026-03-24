@@ -910,7 +910,7 @@ def plot_topo_network(res, path, site_name="",
     ax.grid(True, alpha=0.2, lw=0.5)
 
     fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -937,7 +937,7 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
     hand   = res["hand"].copy()
     hand[np.isnan(hand)] = 50.0
 
-    fig, axes = plt.subplots(1, 2, figsize=(18, 8),
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7),
                               facecolor="white",
                               gridspec_kw={"width_ratios":[2,1]})
 
@@ -1033,7 +1033,7 @@ def plot_hand(res, path, site_name="", r86_m=150.0):
                  f"{res['site_lon']:.4f}E",
                  fontsize=13, fontweight="bold")
     fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -1063,7 +1063,7 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
     clip_km = res["r_inner_km"] * 1.5
     cx86, cy86 = _circle(r86_km)
 
-    fig, axes = plt.subplots(1, 3, figsize=(22, 8),
+    fig, axes = plt.subplots(1, 3, figsize=(18, 7),
                               facecolor="white")
 
     # ---- Left: mappa FRI ----
@@ -1147,6 +1147,6 @@ def plot_fri(res, path, site_name="", r86_m=150.0):
         f"{res['site_lat']:.4f}N {res['site_lon']:.4f}E",
         fontsize=13, fontweight="bold")
     fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")

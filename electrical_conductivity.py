@@ -283,6 +283,6 @@ def plot_ec(ec, path, site_name=""):
             f"Conducibilità Elettrica Apparente (ECa)  |  {site_name}",
             fontsize=13, fontweight="bold")
         fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {path}")

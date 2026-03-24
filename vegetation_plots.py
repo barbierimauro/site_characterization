@@ -147,7 +147,7 @@ def plot_seasonal_cycles(res, path, site_name=""):
         title = f"Seasonal Vegetation Cycles  |  {site_name}  " \
                 f"|  {res['lat']:.4f}N {res['lon']:.4f}E"
         fig.suptitle(title, fontsize=14, fontweight="bold", y=1.01)
-        fig.savefig(path, dpi=180, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
 
     print(f"  Saved: {path}")
@@ -181,7 +181,7 @@ def plot_timeseries(res, path, site_name=""):
     ls_dates = np.array([_to_decimal_year(s["date"]) for s in ls_ts])
 
     with plt.rc_context(STYLE):
-        fig, axes = plt.subplots(5, 1, figsize=(18, 22),
+        fig, axes = plt.subplots(5, 1, figsize=(14, 18),
                                   sharex=False)
         fig.subplots_adjust(hspace=0.38)
 
@@ -271,7 +271,7 @@ def plot_timeseries(res, path, site_name=""):
         title = f"Vegetation Time Series  |  {site_name}  " \
                 f"|  {res['lat']:.4f}N {res['lon']:.4f}E"
         fig.suptitle(title, fontsize=14, fontweight="bold", y=1.005)
-        fig.savefig(path, dpi=160, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
 
     print(f"  Saved: {path}")
@@ -309,7 +309,7 @@ def plot_maps(res, dx_grid, dy_grid, dist_grid, r86, path,
 
     with plt.rc_context(STYLE):
         fig, axes = plt.subplots(nrows, ncols,
-                                  figsize=(7 * ncols, 6 * nrows))
+                                  figsize=(min(6*ncols, 18), min(5*nrows, 15)))
         if n_panels == 1:
             axes = np.array([[axes]])
         elif nrows == 1:
@@ -419,7 +419,7 @@ def plot_maps(res, dx_grid, dy_grid, dist_grid, r86, path,
         title = f"Vegetation Maps  |  {site_name}  " \
                 f"|  {res['lat']:.4f}N {res['lon']:.4f}E"
         fig.suptitle(title, fontsize=14, fontweight="bold")
-        fig.savefig(path, dpi=180, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
 
     print(f"  Saved: {path}")

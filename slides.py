@@ -551,7 +551,7 @@ def plot_landslide(res, path, site_name="", r86_m=150.0):
     r86_km = r86_m / 1000.0
     clip   = r86_km * 1.3   # axis limits [km]
 
-    fig, axes = plt.subplots(1, 3, figsize=(20, 7),
+    fig, axes = plt.subplots(1, 3, figsize=(16, 6),
                               facecolor="white")
 
     # ---- 1: mappa suscettibilità ----
@@ -609,6 +609,6 @@ def plot_landslide(res, path, site_name="", r86_m=150.0):
                  f"{res['site_lat']:.4f}N {res['site_lon']:.4f}E",
                  fontsize=13, fontweight="bold")
     fig.tight_layout()
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")

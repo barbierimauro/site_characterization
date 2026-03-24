@@ -615,7 +615,7 @@ def plot_era5_sm(res, path, site_name=""):
             f"{res['lat']:.4f}N {res['lon']:.4f}E",
             fontsize=13, fontweight="bold")
         fig.tight_layout()
-        fig.savefig(path, dpi=180, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
 
     print(f"  Saved: {path}")

@@ -950,7 +950,6 @@ def main():
     def _plot(fn, func, *args, **kwargs):
         func(*args, **kwargs)
         gc.collect()
-        print(f"  Saved: {fn}", flush=True)
 
     _plot(_outpath("crns_topo_main.png"),
           plot_main, elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,

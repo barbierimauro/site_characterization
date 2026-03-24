@@ -899,7 +899,7 @@ def plot_lulc_worldcover(res, dx_grid, dy_grid, dist_grid,
     fig.suptitle(f"WorldCover LULC  |  {site_name}  |  "
                  f"{res['lat']:.4f}N {res['lon']:.4f}E",
                  fontsize=14, fontweight="bold")
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -1003,6 +1003,6 @@ def plot_lulc_osm(res, path, site_name="", map_radius_m=500):
         ax.axvline(d_val, color="white", lw=0.4, alpha=0.5, zorder=1)
         ax.axhline(d_val, color="white", lw=0.4, alpha=0.5, zorder=1)
 
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {path}")

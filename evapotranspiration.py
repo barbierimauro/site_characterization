@@ -234,7 +234,7 @@ def plot_et(et, site_climate, path, site_name=""):
     w   = 0.38
 
     with plt.rc_context(STYLE):
-        fig, axes = plt.subplots(1, 3, figsize=(20, 7), facecolor="white")
+        fig, axes = plt.subplots(1, 3, figsize=(16, 6), facecolor="white")
 
         # --- Pannello 1: P vs ET₀ ---
         ax = axes[0]
@@ -282,6 +282,6 @@ def plot_et(et, site_climate, path, site_name=""):
             f"{et['lat']:.4f}°N  {et['elev_m']:.0f} m",
             fontsize=13, fontweight="bold")
         fig.tight_layout(rect=[0, 0, 1, 0.95])
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {path}")

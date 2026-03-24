@@ -668,7 +668,7 @@ def plot_sm_fusion(res, path, site_name=""):
         fig.suptitle(f"Soil Moisture Downscaling  |  {site_name}",
                      fontsize=13, fontweight="bold")
         fig.tight_layout()
-        fig.savefig(path, dpi=180, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
 
     print(f"  Saved: {path}")

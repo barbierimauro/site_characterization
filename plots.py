@@ -22,7 +22,7 @@ STYLE = {
 def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
               results, path, lat, lon, dem_radius_m):
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(20, 14))
+        fig = plt.figure(figsize=(16, 11))
         gs  = GridSpec(2, 3, figure=fig, hspace=0.38, wspace=0.35)
 
         # DEM + footprint circles
@@ -114,7 +114,7 @@ def plot_main(elev, dx_grid, dy_grid, r86, kappa_topo, kappa_muon,
             f"{lat:.4f}N {lon:.4f}E  |  "
             f"Alt={results['sensor_alt']:.0f}m  P={results['pressure']:.1f}hPa",
             fontsize=14, fontweight="bold", y=0.99)
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -129,7 +129,7 @@ def plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86_cm,
     z86_m     = z86_cm / 100.0
     z_bot_ref = s_elev - z86_m
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(22, 8))
+        fig = plt.figure(figsize=(18, 7))
         gs  = GridSpec(1, 3, figure=fig, wspace=0.38)
         ax1 = fig.add_subplot(gs[0, 0])
         ax2 = fig.add_subplot(gs[0, 1])
@@ -234,7 +234,7 @@ def plot_footprint(elev, dx_grid, dy_grid, dist_grid, s_elev, r86, z86_cm,
 
         fig.suptitle("CRNS Neutron Footprint — Soil Volume Loss by Direction",
                      fontsize=14, fontweight="bold")
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -285,7 +285,7 @@ def plot_horizon(azimuths, horizon, kappa_muon, per_az_muon, path):
 
         fig.suptitle("Horizon Angles & Muon FOV Correction",
                      fontsize=14, fontweight="bold", y=1.01)
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -299,7 +299,7 @@ def plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
     Y-axis: elevation angle 0-90 deg (0=horizontal, 90=vertical).
     """
     with plt.rc_context(STYLE):
-        fig, axes = plt.subplots(1, 2, figsize=(22, 8))
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7))
         az_fine = np.linspace(0, 360, 720)
         daz     = az_fine[1] - az_fine[0]
 
@@ -380,7 +380,7 @@ def plot_fov_detail(azimuths, horizon, per_az_muon, kappa_muon,
             f"Detailed FOV  |  {lat:.4f}N {lon:.4f}E  |  "
             f"Alt={sensor_alt:.0f}m  r86={r86:.0f}m",
             fontsize=14, fontweight="bold")
-        fig.savefig(path, dpi=150, bbox_inches="tight")
+        fig.savefig(path, dpi=100, bbox_inches="tight")
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -403,7 +403,7 @@ def plot_climate(site_climate, thermal, path, lat, lon, sensor_alt):
         return np.asarray(v, dtype=float) if v is not None else np.full(12, fill)
 
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(20, 18))
+        fig = plt.figure(figsize=(16, 14))
         gs  = GridSpec(3, 2, figure=fig, hspace=0.48, wspace=0.35)
 
         # (0,0) Solar radiation
@@ -512,7 +512,7 @@ def plot_climate(site_climate, thermal, path, lat, lon, sensor_alt):
             f"Site Climate Summary  |  {lat:.4f}N {lon:.4f}E  |  "
             f"Alt={sensor_alt:.0f} m  (PVGIS TMY + ERA5 Open-Meteo)",
             fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=100, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -529,7 +529,7 @@ def plot_soil(soil, path, lat, lon):
     DMID   = np.array([2.5, 10.0, 22.5, 45.0, 80.0, 150.0])
 
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(22, 16))
+        fig = plt.figure(figsize=(16, 12))
         gs  = GridSpec(2, 2, figure=fig, hspace=0.42, wspace=0.38)
 
         # (0,0) Normalised heatmap
@@ -630,7 +630,7 @@ def plot_soil(soil, path, lat, lon):
         fig.suptitle(
             f"Soil Characterization  |  {lat:.4f}N {lon:.4f}E  |  SoilGrids v2.0 ISRIC 250 m",
             fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=100, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -650,7 +650,7 @@ def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
         return float(v) if v is not None and not np.isnan(float(v)) else default
 
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(20, 14))
+        fig = plt.figure(figsize=(16, 11))
         gs  = GridSpec(2, 2, figure=fig, hspace=0.44, wspace=0.35)
 
         # (0,0) T_mean: ERA5 raw vs site-corrected
@@ -743,7 +743,7 @@ def plot_thermal(site_climate, thermal, path, lat, lon, sensor_alt):
         fig.suptitle(
             f"Thermal Correction  |  {lat:.4f}N {lon:.4f}E  |  Alt={sensor_alt:.0f} m",
             fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=100, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -752,7 +752,7 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
     """Four-panel TWI analysis: 2D TWI map, 2D slope map,
     TWI class histogram, radial TWI + slope profile."""
     with plt.rc_context(STYLE):
-        fig  = plt.figure(figsize=(20, 14))
+        fig  = plt.figure(figsize=(16, 11))
         gs   = GridSpec(2, 2, figure=fig, hspace=0.40, wspace=0.38)
         th   = np.linspace(0, 2*np.pi, 360)
         clip = min(1.5 * r86, 800.0)
@@ -854,7 +854,7 @@ def plot_twi(twi, elev, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
 
         fig.suptitle(f"Topographic Wetness Index  |  {lat:.4f}N {lon:.4f}E",
                      fontsize=14, fontweight='bold', y=1.01)
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=100, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -864,7 +864,7 @@ def plot_kappa_budget(results, path, lat, lon):
     Left: kappa decomposition (pieno/sopra/vuoto + muon + total).
     Right: expected CRNS count rates (sea-level vs site, N0)."""
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(20, 8))
+        fig = plt.figure(figsize=(16, 7))
         gs  = GridSpec(1, 2, figure=fig, wspace=0.40)
 
         def _f(key, default=np.nan):
@@ -946,7 +946,7 @@ def plot_kappa_budget(results, path, lat, lon):
 
         fig.suptitle(f"\u03ba Budget & Expected Fluxes  |  {lat:.4f}N {lon:.4f}E",
                      fontsize=14, fontweight='bold')
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=100, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
 
@@ -975,7 +975,7 @@ def plot_water(water, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
     clip = min(1.5 * r86, 600.0)
 
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(22, 8))
+        fig = plt.figure(figsize=(18, 7))
         gs  = plt.GridSpec(1, 3, figure=fig, wspace=0.38)
 
         # ── LEFT: occurrence map ──────────────────────────────────────────
@@ -1085,6 +1085,6 @@ def plot_water(water, dx_grid, dy_grid, dist_grid, r86, path, lat, lon):
             f"JRC Surface Water Correction (\u03b7)  |  {lat:.4f}N {lon:.4f}E  |  "
             f"JRC Global Surface Water v1.4 (Pekel 2016)",
             fontsize=14, fontweight='bold')
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=100, bbox_inches='tight')
         plt.close(fig)
     print(f"  Saved: {path}")
