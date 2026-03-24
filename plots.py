@@ -9,7 +9,7 @@ from matplotlib.gridspec import GridSpec
 # =============================================================================
 
 STYLE = {
-    "figure.dpi": 150, "figure.facecolor": "white",
+    "figure.dpi": 10, "figure.facecolor": "white",
     "axes.facecolor": "#f8f8f6", "axes.grid": True,
     "grid.color": "white", "grid.linewidth": 1.2,
     "axes.spines.top": False, "axes.spines.right": False,

@@ -229,7 +229,7 @@ def report_sampling_plan(sp):
 # ---------------------------------------------------------------------------
 
 STYLE = {
-    "figure.dpi": 150, "figure.facecolor": "white",
+    "figure.dpi": 100, "figure.facecolor": "white",
     "axes.facecolor": "#f8f8f6", "axes.grid": True,
     "grid.color": "white", "grid.linewidth": 1.2,
     "font.family": "DejaVu Sans", "font.size": 11,

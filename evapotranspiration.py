@@ -221,7 +221,7 @@ def plot_et(et, site_climate, path, site_name=""):
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
 
-    STYLE = {"figure.dpi": 150, "figure.facecolor": "white",
+    STYLE = {"figure.dpi": 100, "figure.facecolor": "white",
              "axes.grid": True, "grid.alpha": 0.3}
 
     ET0 = np.array(et['ET0_monthly_mm'])
