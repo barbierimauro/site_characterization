@@ -824,8 +824,8 @@ def plot_topo_network(res, path, site_name="",
     scale_km = min(r86_m / 1000.0 * 3.0, 2.0, clip_km)
     _vis_scale = (np.sqrt(DX**2 + DY**2) <= scale_km)
     _ev   = elev[_vis_scale] if np.any(_vis_scale) else elev.ravel()
-    _vmin = float(np.nanpercentile(_ev, 2))
-    _vmax = float(np.nanpercentile(_ev, 98))
+    _vmin = np.min(_ev)-10 #float(np.nanpercentile(_ev, 1))
+    _vmax = np.max(_ev)+10 #float(np.nanpercentile(_ev, 99))
     # Garantisce almeno 5 m di escursione per non avere colorbar piatta
     if _vmax - _vmin < 5:
         _mid = (_vmin + _vmax) / 2

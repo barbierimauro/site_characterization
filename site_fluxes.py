@@ -288,7 +288,8 @@ def compute_site_fluxes(
     # Neutroni: quota + rigidity + topografia (kappa_topo)
     # ------------------------------------------------------------------ #
     N_muon_site = N_muon_sl * alt_factor_muon * kappa_muon
-    N_neut_site = N_neut_sl * f_Rc * alt_factor_neut * kappa_topo
+    N_neut_site = N_neut_sl * alt_factor_neut * kappa_topo
+    # N_neut_site = N_neut_sl * f_Rc * alt_factor_neut * kappa_topo
 
     # ------------------------------------------------------------------ #
     # 5. N0 teorico — Desilets 2010 con correzione lattice water
@@ -469,7 +470,7 @@ def report_site_fluxes(res):
         "",
         "  --- Atmospheric & geomagnetic ---",
         f"  Pressure at site   : {res['pressure_hpa']:.2f} hPa",
-        f"  dP/P0              : {res['dP_relative']:.4f}",
+        f"  dP-P0              : {res['dP_relative']:.4f}",
         f"  Cutoff rigidity Rc : {res['Rc_gv']:.2f} GV  (Smart & Shea 2019)",
         f"  f_Rc               : {res['f_Rc']:.4f}  (Hawdon 2014)",
         "",

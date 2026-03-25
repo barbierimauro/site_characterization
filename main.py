@@ -463,12 +463,12 @@ def main():
     print("=" * 62)
     print("CRNS TOPOGRAPHIC CORRECTION TOOL")
     print("=" * 62)
-    print(f"  Sensor  : LAT={LAT:.6f}  LON={LON:.6f}")
-    print(f"  Height  : {SENSOR_HEIGHT_M} m a.g.l.")
-    print(f"  rho_b   : {RHO_BULK} g/cm3   theta_v_init : {THETA_V_INIT}")
-    print(f"  DEM     : radius={DEM_RADIUS_M} m   source={DEM_SOURCE}")
-    print(f"  Az step : {AZIMUTH_STEP_DEG} deg   Cores: {N_CORES}")
-    print(f"  Output  : {_OUT}")
+    print(f"  Sensor   : LAT={LAT:.6f}  LON={LON:.6f}")
+    print(f"  Height   : {SENSOR_HEIGHT_M} m a.g.l.")
+    print(f"  rho_b_ini: {RHO_BULK} g/cm3   theta_v_ini : {THETA_V_INIT}")
+    print(f"  DEM      : radius={DEM_RADIUS_M} m   source={DEM_SOURCE}")
+    print(f"  Az step  : {AZIMUTH_STEP_DEG} deg   Cores: {N_CORES}")
+    print(f"  Output   : {_OUT}")
     print("=" * 62)
 
     # 1 — DEM
