@@ -938,21 +938,32 @@ def _get_snow_active_months(catalog, lat, lon, threshold_pct=5.0, verbose=True):
     import planetary_computer as _pc
 
     bbox = [lon - 0.1, lat - 0.1, lon + 0.1, lat + 0.1]
-    try:
-        search = catalog.search(
-            collections=["modis-10CM-061"],
-            bbox=bbox,
-            max_items=84,   # ~7 anni di mensili
-        )
-        items = list(search.items())
-    except Exception:
-        if verbose:
-            print("  MOD10CM non disponibile — nessun filtro stagionale.", flush=True)
-        return set(range(1, 13))
+
+    # Prova più nomi di collection per il prodotto mensile CMG.
+    # "modis-10CM-061" non è un collection ID valido su Planetary Computer;
+    # il prodotto reale è MOD10C2 (8-day CMG) → "modis-10C2-061"
+    # oppure MOD10C3 (monthly CMG) → "modis-10C3-061".
+    _CMG_COLLECTIONS = ["modis-10C2-061", "modis-10C3-061", "modis-10CM-061"]
+    items = []
+    for _coll in _CMG_COLLECTIONS:
+        try:
+            search = catalog.search(
+                collections=[_coll],
+                bbox=bbox,
+                max_items=84,   # ~7 anni di mensili
+            )
+            items = list(search.items())
+            if items:
+                if verbose:
+                    print(f"  MOD10CM usando collection: {_coll}", flush=True)
+                break
+        except Exception:
+            continue
 
     if not items:
         if verbose:
-            print("  MOD10CM: 0 scene → nessun filtro stagionale.", flush=True)
+            print("  MOD10CM: 0 scene (collection non trovata o nessun dato) "
+                  "→ nessun filtro stagionale.", flush=True)
         return set(range(1, 13))
 
     monthly_vals = {m: [] for m in range(1, 13)}
@@ -995,41 +1006,75 @@ def _get_snow_active_months(catalog, lat, lon, threshold_pct=5.0, verbose=True):
 def _pick_primary_tile(items, lat, lon, verbose=True):
     """
     Filtra una lista di STAC items tenendo solo quelli della tile MODIS
-    il cui centro geografico (bbox) è più vicino al sito (lat, lon).
+    il cui centro geografico è più vicino al sito (lat, lon).
     Scarta le tile sovrapposte ai bordi, dimezzando tipicamente il numero di scene.
+
+    Strategia di raggruppamento (in ordine di priorità):
+      1. proprietà STAC modis:horizontal-tile / modis:vertical-tile  ← stabile
+      2. tile H/V estratta dall'item ID via regex  (es. "...h18v04...")
+      3. arrotondamento SW bbox a 2° (fallback robusto vs variazioni fp)
+
+    Il vecchio arrotondamento a 1° causava falsi split: se il catalogo PC
+    riportava variazioni fp nel bbox SW (es. -5.14 vs -5.05), lo stesso
+    tile veniva diviso in due gruppi → quello con 2 scene "vinceva" su
+    quello con 506 scene valide perché il suo centro era leggermente più
+    vicino al sito.
     """
+    import re
     if not items:
         return items
 
     from collections import defaultdict
+
+    def _tile_key(item):
+        # 1. proprietà MODIS native
+        h = item.properties.get("modis:horizontal-tile")
+        v = item.properties.get("modis:vertical-tile")
+        if h is not None and v is not None:
+            return (int(h), int(v))
+        # 2. regex sull'item ID  (es. "MOD10A2.A2020001.h18v04.061...")
+        m = re.search(r'[._](h\d{2}v\d{2})[._]', item.id or "")
+        if m:
+            return m.group(1)   # stringa tipo "h18v04"
+        # 3. bbox SW arrotondato a 2° (fallback)
+        bbox = item.bbox
+        if bbox is not None:
+            return (round(bbox[0] / 2) * 2, round(bbox[1] / 2) * 2)
+        return None
+
     tile_groups = defaultdict(list)
     for item in items:
-        bbox = item.bbox
-        if bbox is None:
+        key = _tile_key(item)
+        if key is None:
             continue
-        # chiave = angolo SW arrotondato a 1 decimale
-        key = (round(bbox[0], 1), round(bbox[1], 1))
         tile_groups[key].append(item)
 
     if not tile_groups:
         return items
 
+    # Per ogni gruppo calcola il centro medio del bbox (media di tutti gli items
+    # → stabile anche se singoli bbox hanno lievi variazioni fp)
     best_key, best_dist = None, float("inf")
     for key, group in tile_groups.items():
-        bbox = group[0].bbox
-        c_lon = (bbox[0] + bbox[2]) / 2
-        c_lat = (bbox[1] + bbox[3]) / 2
+        bboxes = [it.bbox for it in group if it.bbox is not None]
+        if not bboxes:
+            continue
+        c_lon = sum((b[0] + b[2]) / 2 for b in bboxes) / len(bboxes)
+        c_lat = sum((b[1] + b[3]) / 2 for b in bboxes) / len(bboxes)
         dist  = ((c_lon - lon) ** 2 + (c_lat - lat) ** 2) ** 0.5
         if dist < best_dist:
             best_dist, best_key = dist, key
 
     filtered = tile_groups[best_key]
     if verbose and len(tile_groups) > 1:
-        bbox  = filtered[0].bbox
-        c_lon = (bbox[0] + bbox[2]) / 2
-        c_lat = (bbox[1] + bbox[3]) / 2
+        bboxes = [it.bbox for it in filtered if it.bbox is not None]
+        if bboxes:
+            c_lon = sum((b[0] + b[2]) / 2 for b in bboxes) / len(bboxes)
+            c_lat = sum((b[1] + b[3]) / 2 for b in bboxes) / len(bboxes)
+        else:
+            c_lon = c_lat = float("nan")
         n_out = len(items) - len(filtered)
-        print(f"  Tile primaria: centro ({c_lat:.1f}°N, {c_lon:.1f}°E)  "
+        print(f"  Tile primaria: key={best_key}  centro ({c_lat:.1f}°N, {c_lon:.1f}°E)  "
               f"[{n_out} scene da tile secondarie scartate]", flush=True)
 
     return filtered
@@ -1277,7 +1322,9 @@ def get_snow_cover(
     # ------------------------------------------------------------------ #
     # Ricerca scene MOD10A2
     # ------------------------------------------------------------------ #
-    bbox_snow = [lon - 0.015, lat - 0.015, lon + 0.015, lat + 0.015]
+    # 0.05° (~5 km) garantisce intersezione affidabile con il tile MODIS 500m
+    # senza restituire tile lontanissime; il vecchio 0.015° era borderline.
+    bbox_snow = [lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05]
 
     search_snow = catalog.search(
         collections = ["modis-10A2-061"],
