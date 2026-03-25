@@ -62,6 +62,10 @@ NAME = "piancavalli"
 LON = 10.819430
 LAT = 46.469235
 
+# Monte Baldo
+NAME = "montebaldo"
+LAT = 45.772981
+LON = 10.865578
 
 
 #===================
