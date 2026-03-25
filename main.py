@@ -28,6 +28,10 @@ LAT = 46.355945          # decimal degrees, WGS84
 LON = 11.861398
 LAT = 46.925545
 
+#Pian Cavalli
+LON = 10.819430
+LAT = 46.469235
+ 
 # LIMENA
 LON = 11.851084
 LAT = 45.467279
@@ -46,12 +50,17 @@ NAME = "monturaqui_archeo"
 LON             = -68.382350
 LAT             = -24.032953
 
-#================
-
-
 NAME = "camazzole"
 LAT = 45.6428694
 LON = 11.7101639
+
+#================
+
+
+#Pian Cavalli
+NAME = "piancavalli"
+LON = 10.819430
+LAT = 46.469235
 
 
 
