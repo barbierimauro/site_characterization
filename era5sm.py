@@ -538,6 +538,241 @@ def report_era5_sm(res):
 # Plot
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Soil temperature — variabili e helper
+# ---------------------------------------------------------------------------
+
+ST_VARIABLES = [
+    "soil_temperature_0_to_7cm",
+    "soil_temperature_7_to_28cm",
+    "soil_temperature_28_to_100cm",
+    "soil_temperature_100_to_255cm",
+]
+
+ST_LABELS = {
+    "soil_temperature_0_to_7cm"     : "ST 0-7 cm",
+    "soil_temperature_7_to_28cm"    : "ST 7-28 cm",
+    "soil_temperature_28_to_100cm"  : "ST 28-100 cm",
+    "soil_temperature_100_to_255cm" : "ST 100-255 cm",
+}
+
+ST_DEPTHS_MID = {
+    "soil_temperature_0_to_7cm"     : 3.5,
+    "soil_temperature_7_to_28cm"    : 17.5,
+    "soil_temperature_28_to_100cm"  : 64.0,
+    "soil_temperature_100_to_255cm" : 177.5,
+}
+
+
+def _st_var_key(var):
+    """soil_temperature_0_to_7cm -> st0_7"""
+    return (var.replace("soil_temperature_", "st")
+               .replace("_to_", "_")
+               .replace("cm", ""))
+
+
+def _temp_monthly_path(site_dir):
+    return os.path.join(site_dir, "temp_monthly_agg.npz")
+
+
+def _download_year_temp(lat, lon, year):
+    """Scarica temperatura suolo ERA5-Land per un anno."""
+    from net_utils import http_get
+    import pandas as pd
+
+    now        = datetime.now(timezone.utc)
+    date_start = f"{year}-01-01"
+    date_end   = min(f"{year}-12-31", now.strftime("%Y-%m-%d"))
+
+    params = {
+        "latitude"  : lat,
+        "longitude" : lon,
+        "start_date": date_start,
+        "end_date"  : date_end,
+        "hourly"    : ",".join(ST_VARIABLES),
+        "models"    : "era5_land",
+        "timezone"  : "UTC",
+    }
+
+    resp   = http_get(OPEN_METEO_HISTORY_URL, params=params, timeout=120)
+    hourly = resp.json().get("hourly", {})
+    times  = pd.to_datetime(hourly["time"])
+    ts     = np.array(times, dtype="datetime64[s]").astype(np.int64)
+
+    result = {"timestamps": ts,
+              "_fmt_ver": np.array([_CACHE_FORMAT_VERSION], dtype=np.int32)}
+    for var in ST_VARIABLES:
+        vals = np.array(hourly.get(var, [np.nan] * len(times)),
+                        dtype=np.float32)
+        result[var] = vals
+    return result
+
+
+def _compute_temp_monthly_agg(site_dir, years):
+    """Aggrega temperatura suolo mensile da cache hourly."""
+    import pandas as pd
+
+    by_month = {var: {m: [] for m in range(1, 13)} for var in ST_VARIABLES}
+
+    for year in years:
+        p = _hourly_path(site_dir, year)
+        if not os.path.exists(p):
+            continue
+        d  = np.load(p)
+        # Se i dati di temperatura non sono nel file hourly SM, skippa
+        if ST_VARIABLES[0] not in d:
+            continue
+        ts = pd.to_datetime(d["timestamps"], unit="s", utc=True)
+        mo = ts.month.values
+        for var in ST_VARIABLES:
+            if var not in d:
+                continue
+            vals = d[var].astype(float)
+            for m in range(1, 13):
+                mask = (mo == m) & ~np.isnan(vals)
+                if mask.any():
+                    by_month[var][m].extend(vals[mask].tolist())
+
+    agg = {}
+    for var in ST_VARIABLES:
+        key   = _st_var_key(var)
+        means = np.full(12, np.nan, dtype=np.float32)
+        stds  = np.full(12, np.nan, dtype=np.float32)
+        nobs  = np.zeros(12, dtype=np.int32)
+        for m in range(1, 13):
+            v = np.array(by_month[var][m])
+            if len(v) == 0:
+                continue
+            means[m - 1] = float(np.mean(v))
+            stds[m - 1]  = float(np.std(v))
+            nobs[m - 1]  = len(v)
+        agg[f"{key}_mean"] = means
+        agg[f"{key}_std"]  = stds
+        agg[f"{key}_nobs"] = nobs
+    return agg
+
+
+def get_era5_soil_temperature(
+    lat, lon,
+    cache_dir,
+    start_year              = DEFAULT_START_YEAR,
+    force_monthly_recompute = False,
+    verbose                 = True,
+):
+    """
+    Scarica e aggrega temperatura del suolo ERA5-Land per un sito CRNS.
+
+    Usa la stessa site_dir della soil moisture ma scarica le variabili
+    di temperatura in file separati (temp_hourly_YYYY.npz) per non
+    invalidare la cache SM esistente.
+
+    Returns
+    -------
+    dict con:
+      Per ogni var in {st0_7, st7_28, st28_100, st100_255}:
+        {var}_monthly_mean/std/nobs : array (12,)
+      st_profile_depths : array (4,) [cm]
+      months, lat, lon
+    """
+    site_dir = _site_dir(cache_dir, lat, lon)
+    os.makedirs(site_dir, exist_ok=True)
+
+    now        = datetime.now(timezone.utc)
+    all_years  = list(range(start_year, now.year + 1))
+
+    def _temp_hourly_path(yr):
+        return os.path.join(site_dir, f"temp_hourly_{yr}.npz")
+
+    # Download anni mancanti
+    todo = [y for y in all_years if not os.path.exists(_temp_hourly_path(y))]
+    if todo:
+        if verbose:
+            print(f"   ERA5 soil temperature: downloading {todo}", flush=True)
+        for year in todo:
+            if verbose:
+                print(f"   Downloading temp {year} ...", end="  ", flush=True)
+            try:
+                data = _download_year_temp(lat, lon, year)
+                np.savez_compressed(_temp_hourly_path(year), **data)
+                if verbose:
+                    print("OK", flush=True)
+            except Exception as e:
+                if verbose:
+                    print(f"FAILED: {e}", flush=True)
+    else:
+        if verbose:
+            print("   ERA5 soil temperature: all years cached", flush=True)
+
+    cached_years = sorted(y for y in all_years
+                          if os.path.exists(_temp_hourly_path(y)))
+
+    # Aggregati mensili
+    temp_path = _temp_monthly_path(site_dir)
+    need_recompute = (
+        force_monthly_recompute
+        or not os.path.exists(temp_path)
+    )
+    if need_recompute:
+        if verbose:
+            print("   Computing soil temperature monthly aggregates ...",
+                  flush=True)
+        # Aggrega da file temp_hourly_YYYY.npz
+        import pandas as pd
+        by_month = {var: {m: [] for m in range(1, 13)}
+                    for var in ST_VARIABLES}
+        for year in cached_years:
+            p = _temp_hourly_path(year)
+            if not os.path.exists(p):
+                continue
+            d  = np.load(p)
+            ts = pd.to_datetime(d["timestamps"], unit="s", utc=True)
+            mo = ts.month.values
+            for var in ST_VARIABLES:
+                if var not in d:
+                    continue
+                vals = d[var].astype(float)
+                for m in range(1, 13):
+                    mask = (mo == m) & ~np.isnan(vals)
+                    if mask.any():
+                        by_month[var][m].extend(vals[mask].tolist())
+
+        agg = {}
+        for var in ST_VARIABLES:
+            key   = _st_var_key(var)
+            means = np.full(12, np.nan, dtype=np.float32)
+            stds  = np.full(12, np.nan, dtype=np.float32)
+            nobs  = np.zeros(12, dtype=np.int32)
+            for m in range(1, 13):
+                v = np.array(by_month[var][m])
+                if len(v) == 0:
+                    continue
+                means[m - 1] = float(np.mean(v))
+                stds[m - 1]  = float(np.std(v))
+                nobs[m - 1]  = len(v)
+            agg[f"{key}_mean"] = means
+            agg[f"{key}_std"]  = stds
+            agg[f"{key}_nobs"] = nobs
+        np.savez_compressed(temp_path, **agg)
+    else:
+        if verbose:
+            print("   Soil temperature aggregates: from cache", flush=True)
+        agg = dict(np.load(temp_path))
+
+    result = {
+        "months"           : MONTHS,
+        "lat"              : lat,
+        "lon"              : lon,
+        "st_profile_depths": np.array([3.5, 17.5, 64.0, 177.5]),
+    }
+    for var in ST_VARIABLES:
+        key = _st_var_key(var)
+        for stat in ["mean", "std", "nobs"]:
+            result[f"{key}_monthly_{stat}"] = agg.get(
+                f"{key}_{stat}", np.full(12, np.nan))
+
+    return result
+
+
 def plot_era5_sm(res, path, site_name=""):
     """
     Sinistra: cicli mensili mean ± std per i 3 strati

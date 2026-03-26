@@ -105,7 +105,8 @@ from terrain_indices    import (compute_twi, report_twi,
 from get_soil_properties import get_soil_properties, report_soil_properties
 from water               import compute_water_eta, report_water_eta
 from vegetation_indices  import (get_vegetation_indices, report_vegetation,
-                                 get_snow_cover, report_snow_cover)
+                                 get_snow_cover, report_snow_cover,
+                                 plot_snow_cover)
 from plots import (plot_main, plot_footprint, plot_horizon, plot_fov_detail,
                    plot_climate, plot_soil, plot_thermal, plot_twi,
                    plot_kappa_budget, plot_water)
@@ -122,8 +123,11 @@ from crns_corrections import get_crns_corrections, report_crns_corrections
 from geology import get_geology, report_geology
 from sampling_plan import (compute_sampling_plan, report_sampling_plan,
                             plot_sampling_plan)
-from era5sm import (get_era5_soil_moisture, report_era5_sm, plot_era5_sm)
+from era5sm import (get_era5_soil_moisture, report_era5_sm, plot_era5_sm,
+                    get_era5_soil_temperature)
 from smphysics import (fuse_soil_moisture, report_sm_fusion, plot_sm_fusion)
+from soil_hydraulics import (compute_soil_hydraulics, report_soil_hydraulics,
+                              plot_soil_hydraulics)
 from config_parser import load_config, get as cfg_get
 from radiofreq import run_rf_analysis
 
@@ -723,6 +727,34 @@ def main():
     )
     print(report_sm_fusion(sm_fused))
 
+    # 19b — ERA5-Land soil temperature (4 profondità)
+    print("\n[19b] Downloading ERA5-Land soil temperature ...")
+    soil_temp = None
+    try:
+        soil_temp = get_era5_soil_temperature(
+            LAT, LON,
+            cache_dir  = _OUT,
+            start_year = 2015,
+            verbose    = True,
+        )
+    except Exception as _st_e:
+        print(f"   [WARN] Soil temperature failed: {_st_e}")
+
+    # 19c — Soil hydraulics (van Genuchten + ψ/K mensile + pH + OM)
+    print("\n[19c] Computing soil hydraulics (van Genuchten SWRC) ...")
+    soil_hyd = None
+    try:
+        soil_hyd = compute_soil_hydraulics(
+            soil_res     = soil,
+            era5_sm_res  = era5_sm,
+            sm_fused_res = sm_fused,
+            soil_temp_res= soil_temp,
+        )
+        print(report_soil_hydraulics(soil_hyd))
+    except Exception as _sh_e:
+        print(f"   [WARN] Soil hydraulics failed: {_sh_e}")
+        import traceback; traceback.print_exc()
+
     # 20 — Evapotranspiration (FAO-56 Penman-Monteith)
     print("\n[20] Computing evapotranspiration (FAO-56 PM) ...")
     et_result = compute_et(site_climate, LAT, s_elev, crns_corr=crns_corr)
@@ -851,6 +883,8 @@ def main():
         ec=ec_result,
         landslide=landslide_result,
         flood=flood_result,
+        soil_hyd=soil_hyd,
+        soil_temp=soil_temp,
         history=[],   # no iteration history with cell-summation method
     )
     params = dict(
@@ -956,6 +990,14 @@ def main():
               plot_fri, flood_result,
               _outpath("crns_flood_fri.png"),
               site_name=NAME, r86_m=r86)
+
+    _plot(_outpath("crns_snow_cover.png"),
+          plot_snow_cover, snow,
+          _outpath("crns_snow_cover.png"), site_name=NAME)
+    if soil_hyd is not None:
+        _plot(_outpath("crns_soil_hydraulics.png"),
+              plot_soil_hydraulics, soil_hyd,
+              _outpath("crns_soil_hydraulics.png"), site_name=NAME)
 
     elapsed = time.perf_counter() - t0
     print(f"\n[DONE]  wall time = {elapsed:.0f}s  ({elapsed/60:.1f} min)")

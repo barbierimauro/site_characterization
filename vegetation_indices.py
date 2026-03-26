@@ -1575,3 +1575,93 @@ def report_vegetation(res):
     L.append(f"  {'f_veg':<8}       {fv_s}")
     L.append("="*w)
     return "\n".join(L)
+
+
+def plot_snow_cover(snow, path, site_name=""):
+    """
+    Due pannelli:
+      Sinistra : copertura neve mensile [%] con barre di errore (std)
+      Destra   : periodi 8-day con neve > 50% per mese
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    STYLE = {
+        "figure.dpi": 100, "figure.facecolor": "white",
+        "axes.facecolor": "#f8f8f6", "axes.grid": True,
+        "grid.color": "white", "grid.linewidth": 1.2,
+        "axes.spines.top": False, "axes.spines.right": False,
+        "font.family": "DejaVu Sans", "font.size": 11,
+        "axes.titlesize": 12, "axes.labelsize": 11,
+        "xtick.labelsize": 9, "ytick.labelsize": 9,
+    }
+
+    M  = snow.get("months", ["Jan","Feb","Mar","Apr","May","Jun",
+                              "Jul","Aug","Sep","Oct","Nov","Dec"])
+    x  = np.arange(1, 13)
+    mn = np.asarray(snow["snow_cover_monthly_pct"], dtype=float)
+    sd = np.asarray(snow["snow_cover_monthly_std"], dtype=float)
+    nd = np.asarray(snow["snow_days_monthly"],      dtype=float)
+
+    with plt.rc_context(STYLE):
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6),
+                                        facecolor="white")
+
+        # --- copertura neve % ---
+        bar_colors = ["#92c5de" if v < 30 else
+                      ("#4393c3" if v < 70 else "#2166ac")
+                      for v in mn]
+        bars = ax1.bar(x, mn, color=bar_colors, alpha=0.85,
+                       edgecolor="white", width=0.7)
+        # error bars
+        valid = ~np.isnan(mn) & ~np.isnan(sd)
+        ax1.errorbar(x[valid], mn[valid], yerr=sd[valid],
+                     fmt="none", color="#555", capsize=4, lw=1.2, zorder=5)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(M, fontsize=9)
+        ax1.set_ylabel("Snow cover [%]")
+        ax1.set_ylim(0, min(100, np.nanmax(mn + sd) * 1.15 + 5))
+        ax1.set_xlim(0.4, 12.6)
+        ax1.set_title(
+            f"Copertura neve mensile  ({snow['n_scenes_total']} scene)\n"
+            f"Annuale: {snow['snow_cover_annual_pct']:.1f} %",
+            fontsize=11,
+        )
+        # annotazione mesi nevosi
+        snowy = snow.get("snow_months", [])
+        if snowy:
+            ax1.text(0.02, 0.97,
+                     "Mesi nevosi: " + ", ".join(snowy),
+                     transform=ax1.transAxes, va="top", fontsize=9,
+                     color="#1a6faf")
+
+        # --- periodi 8-day ---
+        bar_c2 = ["#d1e5f0" if v < 1 else
+                  ("#4dac26" if v < 3 else "#1a6faf")
+                  for v in nd]
+        ax2.bar(x, nd, color=bar_c2, alpha=0.85,
+                edgecolor="white", width=0.7)
+        ax2.axhline(2, color="#b2182b", ls="--", lw=1.3,
+                    label="Soglia 2 periodi/mese")
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(M, fontsize=9)
+        ax2.set_ylabel("Periodi 8-day con neve > 50%")
+        ax2.set_xlim(0.4, 12.6)
+        ax2.set_ylim(0, None)
+        ax2.legend(fontsize=9)
+        ax2.set_title(
+            f"Periodi nevosi mensili\n"
+            f"Totale/anno: {snow['snow_days_annual']:.1f} periodi",
+            fontsize=11,
+        )
+
+        fig.suptitle(
+            f"Snow Cover — MODIS MOD10A2.061  |  {site_name}",
+            fontsize=13, fontweight="bold",
+        )
+        fig.tight_layout(rect=[0, 0, 1, 0.93])
+        fig.savefig(path, dpi=100)
+        plt.close(fig)
+
+    print(f"  Saved: {path}")

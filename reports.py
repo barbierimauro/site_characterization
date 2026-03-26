@@ -18,6 +18,7 @@ from evapotranspiration import report_et
 from electrical_conductivity import report_ec
 from slides             import report_landslide
 from floods             import report_flood
+from soil_hydraulics    import report_soil_hydraulics
 
 
 def write_report(path, params, results):
@@ -189,6 +190,13 @@ def write_report(path, params, results):
     h("FLOOD SUSCEPTIBILITY (HAND + FRI)")
     if 'flood' in results and results['flood'] is not None:
         s(report_flood(results['flood']))
+    else:
+        s("  [non disponibile]")
+    s()
+
+    h("SOIL HYDRAULICS (van Genuchten SWRC, K(θ), ψ, pH, OM, T suolo)")
+    if results.get('soil_hyd') is not None:
+        s(report_soil_hydraulics(results['soil_hyd']))
     else:
         s("  [non disponibile]")
     s()
